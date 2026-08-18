@@ -1,0 +1,15 @@
+{
+  "id": "hello-demo",
+  "name": "Hello 示例插件（演示）",
+  "version": "1.0.0",
+  "kind": "plugin",
+  "description": "演示 DSH Desktop 插件契约：清单 / main 激活钩子 / test 测试。",
+  "author": "DSH Desktop",
+  "main": "main.js",
+  "test": "test.js",
+  "compat": {
+    "os": ["win32", "linux", "darwin"],
+    "arch": ["x64", "arm64"],
+    "electron": ">=28"
+  }
+}

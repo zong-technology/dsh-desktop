@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'">
+<title>DSH Desktop · 未连接</title>
+<style>
+  :root { --bg:#0f1115; --text:#e6e9ef; --muted:#8b93a3; --accent:#4f8cff; --accent2:#7c5cff; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif; height:100vh; display:flex; align-items:center; justify-content:center; }
+  .box { text-align:center; max-width:520px; padding:40px; }
+  .big { font-size:52px; margin-bottom:16px; }
+  h1 { font-size:22px; margin-bottom:10px; }
+  p { color:var(--muted); line-height:1.7; margin-bottom:20px; font-size:14px; }
+  code { background:#1b2029; border:1px solid #262d3a; border-radius:6px; padding:2px 8px; font-size:13px; }
+  button { background:linear-gradient(135deg,var(--accent),var(--accent2)); border:none; color:#fff; padding:10px 22px; border-radius:10px; font-size:14px; cursor:pointer; font-weight:600; }
+  button:hover { filter:brightness(1.12); }
+  .hint { font-size:12px; margin-top:16px; }
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="big">🔌</div>
+  <h1>DSH Web GUI 未运行</h1>
+  <p>
+    请在终端启动 DeepSeek Harness 的 Web 界面后重试：<br>
+    <code>dsh web</code>（默认地址 <code id="url">http://127.0.0.1:3080</code>）
+  </p>
+  <button id="retry">重试连接</button>
+  <div class="hint">如果你已经启动但这里仍然显示未连接，请确认端口是否被占用或地址不同（可在设置「关于」中查看）。</div>
+</div>
+<script>
+  const params = new URLSearchParams(location.search);
+  const url = params.get('url') || 'http://127.0.0.1:3080';
+  document.getElementById('url').textContent = url;
+  document.getElementById('retry').onclick = () => {
+    try { window.dshDesktop && window.dshDesktop.retry && window.dshDesktop.retry(); } catch (e) {}
+    location.href = url;
+  };
+</script>
+</body>
+</html>

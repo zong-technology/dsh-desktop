@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src *; media-src *; style-src 'unsafe-inline'">
+<title>DSH Desktop · Wallpaper</title>
+<style>
+  html, body { margin:0; padding:0; background:#000; overflow:hidden; width:100%; height:100%; }
+  video { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; pointer-events:none; background:#000; }
+</style>
+</head>
+<body>
+<video id="v" autoplay muted loop playsinline></video>
+<script>
+  const p = new URLSearchParams(location.search);
+  const kind = p.get('kind');
+  const src = p.get('src');
+  const v = document.getElementById('v');
+  if (kind === 'video' && src) {
+    v.src = src;
+    v.play().catch(() => {});
+  }
+</script>
+</body>
+</html>

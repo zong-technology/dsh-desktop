@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "description": "DSH Desktop 推荐插件与 Skill 注册表；发布到 GitHub 后可通过 raw URL 云端更新",
+  "items": [
+    {
+      "id": "memory-plugin",
+      "name": "上下文记忆",
+      "kind": "plugin",
+      "builtin": true,
+      "recommended": true,
+      "version": "builtin",
+      "description": "注入脚本只读监听 DSH 对话；接近上下文上限（默认 70%）时自动生成简洁交接摘要，写入 HANDOFF.md 留给下一个会话；可选 DeepSeek API Key 做 LLM 总结。",
+      "author": "DSH Desktop",
+      "tags": ["记忆", "上下文", "内置"]
+    },
+    {
+      "id": "wallpaper-plugin",
+      "name": "动态壁纸",
+      "kind": "plugin",
+      "builtin": true,
+      "recommended": true,
+      "version": "builtin",
+      "description": "视频 / 网页动态壁纸，挂载到 Windows 桌面图标之下（类似 Wallpaper Engine），支持多显示器虚拟屏幕。",
+      "author": "DSH Desktop",
+      "tags": ["壁纸", "动态", "内置"]
+    },
+    {
+      "id": "hello-demo",
+      "name": "Hello 示例插件（演示）",
+      "kind": "plugin",
+      "recommended": true,
+      "description": "演示插件系统的完整契约：清单、main 激活钩子（托盘项）、test 测试脚本。安装后托盘会出现「🔔 Hello 示例插件」菜单。安装过程会真实执行兼容性检查 + 测试脚本。",
+      "author": "DSH Desktop",
+      "tags": ["示例", "模板"],
+      "source": { "local": "example-plugins/hello" }
+    },
+    {
+      "id": "skill-translate",
+      "name": "翻译助手 Skill",
+      "kind": "skill",
+      "recommended": true,
+      "description": "复制翻译专用提示词：中英互译、术语表、保留代码与格式。",
+      "author": "DSH Desktop",
+      "tags": ["skill", "翻译"],
+      "prompt": "你是专业翻译。请把用户给出的内容翻译成目标语言（未指定时默认中英互译）：\n1. 保持术语一致，技术名词给出括号注释\n2. 保留代码块、URL、文件名原样\n3. 译文通顺自然，长句可拆分\n直接输出译文，无需解释。"
+    },
+    {
+      "id": "skill-code-review",
+      "name": "代码审查 Skill",
+      "kind": "skill",
+      "recommended": true,
+      "description": "代码审查提示词：安全、性能、可读性、bug 风险四维度检查。",
+      "author": "DSH Desktop",
+      "tags": ["skill", "代码"],
+      "prompt": "你是资深代码审查员。审查用户给出的代码/改动：\n1. 按【安全性】【性能】【可读性/可维护性】【潜在 Bug】四类列出问题\n2. 每个问题给出严重级别（高/中/低）与一行修复建议\n3. 最后给总体评价与改进优先级\n用中文回答，简洁准确。"
+    },
+    {
+      "id": "skill-summary",
+      "name": "文章/会议总结 Skill",
+      "kind": "skill",
+      "recommended": true,
+      "description": "把长文或会议记录压缩成结构化摘要。",
+      "author": "DSH Desktop",
+      "tags": ["skill", "总结"],
+      "prompt": "你是摘要专家。把用户给出的长文本压缩成结构化摘要：\n【核心结论】3 条以内\n【要点】分条列出，每条不超过 25 字\n【数据/关键信息】涉及的数字、人名、条款单独列出\n【待办】若有\n总长度控制在原文 20% 以内。"
+    },
+    {
+      "id": "skill-daily-report",
+      "name": "日报/周报 Skill",
+      "kind": "skill",
+      "recommended": true,
+      "description": "根据工作记录生成规范日报/周报。",
+      "author": "DSH Desktop",
+      "tags": ["skill", "汇报"],
+      "prompt": "你是工作汇报助手。根据用户提供的原始记录，生成规范日报/周报：\n格式：【今日/本周完成】【进行中】【问题与风险】【明日/下周计划】\n语言简洁，量化结果（如“完成 X 项”、“提升 20%”），避免空话。"
+    },
+    {
+      "id": "skill-web-search",
+      "name": "联网搜索引导 Skill",
+      "kind": "skill",
+      "recommended": true,
+      "description": "提示模型在需要最新信息时主动使用 web_search 工具并标注来源。",
+      "author": "DSH Desktop",
+      "tags": ["skill", "搜索"],
+      "prompt": "当用户问题涉及最新信息（新闻、版本、价格、天气等超过你知识截止日期的事实）时：\n1. 先调用 web_search 工具检索\n2. 回答基于搜索结果，并附上来源链接\n3. 搜索不到时明确说明，不要编造\n4. 多轮对话中如需更新信息可再次搜索。"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "name": "dsh-desktop",
+  "productName": "DSH Desktop",
+  "version": "0.1.0",
+  "description": "Desktop shell for the DeepSeek Harness web GUI: plugin system, context memory, dynamic wallpaper.",
+  "main": "src/main.js",
+  "license": "MIT",
+  "author": "DSH Desktop Contributors",
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/run-tests.js",
+    "test:wallpaper": "electron test/wallpaper-smoke.js",
+    "make:icon": "powershell -ExecutionPolicy Bypass -File scripts/make-icon.ps1",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win nsis portable"
+  },
+  "devDependencies": {
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "koffi": "^3.1.5"
+  }
+}

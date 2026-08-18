@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:;">
+<title>DSH Desktop · 设置</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <img src="assets/icon.png" class="logo" alt="">
+    <span>DSH Desktop</span>
+    <span class="ver">v0.1.0</span>
+  </div>
+  <nav>
+    <button data-tab="plugins" class="active">插件</button>
+    <button data-tab="recommended">推荐</button>
+    <button data-tab="memory">记忆</button>
+    <button data-tab="wallpaper">壁纸</button>
+    <button data-tab="about">关于</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ============ 插件 ============ -->
+  <section id="tab-plugins" class="tab active">
+    <div class="card">
+      <h3>🛠 安装插件</h3>
+      <p class="hint">
+        支持：<b>GitHub 仓库</b>（<code>owner/repo</code> 或 <code>owner/repo@tag</code>）、
+        <b>zip 直链</b>（<code>https://…/plugin.zip</code>）、<b>本地目录</b>（<code>local:C:\path</code>）。<br>
+        <b style="color:var(--yellow)">安全协议</b>：安装前自动检查兼容性（OS/架构/Electron/DSH 版本）→ 安装后自动运行插件测试 → 测试通过才启用；任何一步失败会<b>自动回滚删除</b>，不会留残留。
+      </p>
+      <div class="row">
+        <input type="text" id="install-spec" placeholder="例如: deepseek-community/dsh-plugin-demo 或 local:C:\plugins\demo" spellcheck="false">
+        <button id="btn-install" class="primary">安装</button>
+      </div>
+      <div id="install-result" class="result"></div>
+    </div>
+
+    <div class="card">
+      <h3>已安装插件 <span id="plugin-count" class="badge">0</span></h3>
+      <div id="plugin-list"></div>
+    </div>
+  </section>
+
+  <!-- ============ 推荐 ============ -->
+  <section id="tab-recommended" class="tab">
+    <div class="card">
+      <h3>⭐ 推荐插件与 Skill <span id="rec-source" class="badge">本地</span></h3>
+      <p class="hint">内置的插件/Skill 直接开关即可；仓库型插件需要先安装（同样经过兼容性检查与测试）。</p>
+      <div id="rec-list"></div>
+    </div>
+  </section>
+
+  <!-- ============ 记忆 ============ -->
+  <section id="tab-memory" class="tab">
+    <div class="card">
+      <h3>🧠 上下文记忆
+        <button class="switch" id="memory-enable" title="开关上下文记忆"></button>
+      </h3>
+      <p class="hint">
+        注入脚本只读地监听 DSH 页面对话；当估算用量达到阈值时自动生成<b>简洁交接摘要</b>，
+        写入 <code>memory/HANDOFF.md</code> 留给下一个会话。可选配置 DeepSeek API Key 用 LLM 生成更高质量的总结。
+      </p>
+      <div class="form-grid">
+        <div class="form-item">
+          <label>上下文上限（token 估算）</label>
+          <input type="number" id="mem-limit" min="4000" step="1000">
+        </div>
+        <div class="form-item">
+          <label>触发总结阈值（占上限比例）</label>
+          <input type="number" id="mem-threshold" min="0.1" max="1" step="0.05">
+        </div>
+        <div class="form-item">
+          <label>DeepSeek API Key（可选，用于 LLM 总结）</label>
+          <input type="password" id="mem-apikey" placeholder="sk-…">
+        </div>
+        <div class="form-item">
+          <label>下次启动自动注入交接摘要到对话框（实验性）</label>
+          <input type="text" id="mem-autoinject" placeholder="留空关闭；输入 auto 表示开启">
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button id="btn-summarize" class="primary">立即总结（规则）</button>
+        <button id="btn-summarize-llm">用 LLM 总结</button>
+        <button id="btn-copy-handoff">复制交接摘要</button>
+        <button id="btn-inject-handoff">注入到 DSH 对话框</button>
+      </div>
+      <div class="metric" id="mem-metric"></div>
+      <div class="handoff-preview" id="handoff-preview">（暂无交接摘要）</div>
+      <h3 style="margin-top:14px">历史交接 <span id="conv-count" class="badge">0</span></h3>
+      <div id="conv-list"></div>
+    </div>
+  </section>
+
+  <!-- ============ 壁纸 ============ -->
+  <section id="tab-wallpaper" class="tab">
+    <div class="card">
+      <h3>🎨 动态壁纸（Windows）</h3>
+      <p class="hint">
+        视频 / 网页壁纸会挂载到桌面图标之下（类似 Wallpaper Engine）。此功能由内置插件
+        <b>wallpaper-plugin</b> 提供——若开关是灰的，请先到「推荐」页启用它。
+      </p>
+      <div class="radio-row">
+        <label><input type="radio" name="wp-type" value="off"> 关闭</label>
+        <label><input type="radio" name="wp-type" value="video"> 视频壁纸</label>
+        <label><input type="radio" name="wp-type" value="web"> 网页壁纸</label>
+      </div>
+      <div class="row">
+        <input type="text" id="wp-source" placeholder="视频文件路径 或 网页 URL（https://…）" spellcheck="false">
+        <button id="btn-pick-video">选择视频…</button>
+        <button id="btn-wp-apply" class="primary">应用</button>
+      </div>
+      <div id="wp-state" class="metric"></div>
+    </div>
+  </section>
+
+  <!-- ============ 关于 ============ -->
+  <section id="tab-about" class="tab">
+    <div class="card">
+      <h3>ℹ️ 关于</h3>
+      <div id="about-info" class="hint"></div>
+      <div style="margin-top:8px;display:flex;gap:10px;flex-wrap:wrap">
+        <button id="btn-open-github">打开 GitHub 仓库</button>
+        <button id="btn-reload-dsh">重新加载 DSH 页面</button>
+        <button id="btn-open-data-dir">打开数据目录</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+<script src="renderer.js"></script>
+</body>
+</html>
