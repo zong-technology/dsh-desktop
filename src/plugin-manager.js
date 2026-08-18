@@ -205,17 +205,9 @@ class PluginManager {
     spec = String(spec || '').trim();
     if (!spec) throw new Error('安装源为空');
     if (spec.startsWith('local:')) {
-      const rest = spec.slice('local:'.length);
-      // 支持 local:path:subdir
-      const i = rest.indexOf(':');
-      let dir = rest;
-      let subdir = null;
-      if (i > 0 && fs.existsSync(rest.slice(0, i))) {
-        dir = rest.slice(0, i);
-        subdir = rest.slice(i + 1) || null;
-      }
+      const dir = spec.slice('local:'.length);
       if (!fs.existsSync(dir)) throw new Error(`本地目录不存在: ${dir}`);
-      return { kind: 'local', dir, subdir, spec };
+      return { kind: 'local', dir, subdir: null, spec };
     }
     if (/^https?:\/\//.test(spec)) {
       if (!/\.zip(?:[?#]|$)/i.test(spec)) {
@@ -230,21 +222,25 @@ class PluginManager {
     const m = spec.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:@([A-Za-z0-9_.\-]+))?(?::([^:]+))?$/);
     if (!m) throw new Error(`无法识别的安装源: ${spec}（支持 owner/repo[:子目录]、owner/repo@tag、zip URL、local:路径）`);
     const [, owner, repo, tag, subdir] = m;
-    if (!tag || tag === 'latest') {
-      // 查最新 release
-      const api = `https://api.github.com/repos/${owner}/${repo}/releases/latest`;
-      let realTag = tag === 'latest' ? null : 'latest';
+    if (!tag) {
+      // 未指定 tag → 默认分支 main（无需访问 GitHub API）
+      return { kind: 'zip', url: `https://codeload.github.com/${owner}/${repo}/zip/refs/heads/main`, spec, subdir: subdir || null };
+    }
+    if (tag === 'latest') {
+      // 查最新 release tag；失败则回退默认分支
       try {
-        const res = await fetch(api, { headers: { 'User-Agent': 'dsh-desktop', Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(15000) });
+        const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/releases/latest`, {
+          headers: { 'User-Agent': 'dsh-desktop', Accept: 'application/vnd.github+json' },
+          signal: AbortSignal.timeout(15000),
+        });
         if (res.ok) {
           const data = await res.json();
-          realTag = data.tag_name;
+          if (data.tag_name) {
+            return { kind: 'zip', url: `https://codeload.github.com/${owner}/${repo}/zip/refs/tags/${encodeURIComponent(data.tag_name)}`, spec, tag: data.tag_name, subdir: subdir || null };
+          }
         }
       } catch (e) {
         this.log.warn?.(`查询 latest release 失败，回退默认分支: ${e.message}`);
-      }
-      if (realTag) {
-        return { kind: 'zip', url: `https://codeload.github.com/${owner}/${repo}/zip/refs/tags/${encodeURIComponent(realTag)}`, spec, tag: realTag, subdir: subdir || null };
       }
       return { kind: 'zip', url: `https://codeload.github.com/${owner}/${repo}/zip/refs/heads/main`, spec, subdir: subdir || null };
     }
