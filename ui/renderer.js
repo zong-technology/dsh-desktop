@@ -301,21 +301,55 @@ async function renderAbout() {
   $('#lnk-dsh')?.addEventListener('click', () => window.open(info.dshUrl));
 }
 
-// ---------- 安装 ----------
+// ---------- 安装（含进度流程视图） ----------
+
+const INSTALL_STEPS = [
+  { key: 'resolve', label: '解析源' },
+  { key: 'download', label: '下载' },
+  { key: 'extract', label: '解压' },
+  { key: 'manifest', label: '校验清单' },
+  { key: 'compat', label: '兼容检查' },
+  { key: 'copy', label: '复制安装' },
+  { key: 'test', label: '运行测试' },
+  { key: 'done', label: '完成' },
+];
+let stepState = {};
+let stepLog = [];
+
+function resetSteps() {
+  stepState = {};
+  stepLog = [];
+  renderSteps();
+}
+
+function renderSteps() {
+  const res = $('#install-result');
+  const stepsHtml = INSTALL_STEPS.map((s) => {
+    const st = stepState[s.key] || 'waiting';
+    const mark = st === 'done' ? '✓' : st === 'doing' ? '⏳' : st === 'fail' ? '✗' : '·';
+    return `<span class="step ${st}">${mark} ${s.label}</span>`;
+  }).join('');
+  const logHtml = stepLog.length
+    ? `<div class="step-log">${stepLog.map((l) => `<span class="${l.kind}">${esc(l.text)}</span>`).join('\n')}</div>`
+    : '';
+  res.innerHTML = `<div class="steps">${stepsHtml}</div>${logHtml}`;
+}
 
 async function doInstall(spec) {
   const res = $('#install-result');
   res.className = 'result';
-  res.textContent = '⏳ 正在安装并测试: ' + spec + ' …';
+  resetSteps();
+  stepLog.push({ kind: 'ok', text: `开始安装: ${spec}` });
+  renderSteps();
   const r = await api.invoke('plugins:install', spec);
   if (r.ok) {
-    res.className = 'result ok';
-    res.innerHTML = `✅ 安装成功：<b>${esc(r.manifest.name)}</b> v${esc(r.manifest.version)} （兼容性检查 ✅ · 测试 ✅）`;
+    stepLog.push({ kind: 'ok', text: `✅ 安装成功：${r.manifest.name} v${r.manifest.version}（兼容性检查 ✅ 测试 ✅）` });
+    renderSteps();
     toast('安装成功（已通过兼容检查与测试）', 'ok');
     await refreshAll();
   } else {
-    res.className = 'result err';
-    res.innerHTML = `❌ 安装失败，<b>已自动回滚删除</b>。<br>原因：${esc(r.error)}`;
+    stepLog.push({ kind: 'err', text: `❌ 安装失败，已自动回滚删除。原因：${r.error}` });
+    renderSteps();
     toast('安装失败，已自动回滚', 'err');
   }
 }
@@ -374,6 +408,32 @@ async function init() {
   $('#btn-open-data-dir').onclick = () => api.invoke('app:open-external', 'file:///' + (info?.pluginsDir || '').replace(/\\/g, '/').replace(/\/plugins$/, ''));
 
   api.on('memory:handoff-updated', () => refreshHandoff());
+  api.on('nav-to', (t) => {
+    if (t && document.querySelector(`nav button[data-tab="${t}"]`)) tab(t);
+  });
+  api.on('plugin:install-progress', (p) => {
+    if (!p || !p.stage) return;
+    // 更新步骤状态
+    for (const s of INSTALL_STEPS) {
+      const pos = INSTALL_STEPS.indexOf(s);
+      const curPos = INSTALL_STEPS.findIndex((x) => x.key === p.stage);
+      if (p.stage === 'fail') {
+        if (pos < curPos) stepState[s.key] = 'done';
+        else if (pos === curPos) stepState[s.key] = 'fail';
+      } else if (curPos === pos) {
+        stepState[s.key] = 'doing';
+      } else if (curPos > pos) {
+        stepState[s.key] = 'done';
+      }
+    }
+    if (p.stage === 'fail') {
+      stepLog.push({ kind: 'err', text: p.message || '安装失败' });
+    } else {
+      stepLog.push({ kind: 'ok', text: p.message || p.stage });
+    }
+    if (stepLog.length > 40) stepLog = stepLog.slice(-40);
+    renderSteps();
+  });
 
   await refreshAll();
 }

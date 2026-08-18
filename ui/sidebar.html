@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:;">
+<title>DSH Desktop · 功能栏</title>
+<style>
+  :root {
+    --bg: #10131a;
+    --bg2: #171b24;
+    --border: #232a37;
+    --text: #e6e9ef;
+    --muted: #8b93a3;
+    --accent: #4f8cff;
+    --accent2: #7c5cff;
+    --green: #34c759;
+    --red: #ff5f57;
+    --yellow: #ffd60a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column;
+    user-select: none;
+  }
+
+  .brand { display: flex; align-items: center; gap: 8px; padding: 14px 14px 10px; }
+  .brand img { width: 22px; height: 22px; border-radius: 5px; }
+  .brand .name { font-weight: 700; font-size: 13.5px; letter-spacing: .3px; }
+  .brand .ver { color: var(--muted); font-size: 10.5px; margin-left: 2px; }
+
+  .status {
+    display: flex; align-items: center; gap: 7px;
+    margin: 0 12px 10px;
+    padding: 7px 10px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); flex-shrink: 0; }
+  .dot.on { background: var(--green); box-shadow: 0 0 6px rgba(52,199,89,.7); }
+  .status .txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .nav { display: flex; flex-direction: column; gap: 2px; padding: 4px 10px; }
+  .nav .group-label { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .8px; padding: 8px 8px 4px; }
+  .nav button {
+    display: flex; align-items: center; gap: 10px;
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    padding: 9px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    text-align: left;
+  }
+  .nav button:hover { background: rgba(255,255,255,.06); }
+  .nav button .ic { font-size: 15px; width: 20px; text-align: center; }
+
+  .quick { padding: 8px 12px; border-top: 1px solid var(--border); margin-top: 4px; }
+  .quick .row { display: flex; align-items: center; justify-content: space-between; padding: 7px 2px; }
+  .quick .row .lbl { display: flex; align-items: center; gap: 8px; }
+  .quick .row .lbl .ic { font-size: 14px; }
+  .quick .btn {
+    width: 100%;
+    margin-top: 6px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 12.5px;
+  }
+  .quick .btn:hover { filter: brightness(1.15); }
+  .quick .btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); border: none; color: #fff; font-weight: 600; }
+
+  .switch {
+    width: 38px; height: 21px;
+    border-radius: 12px;
+    background: #333b4c;
+    border: none;
+    position: relative;
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+    transition: background .2s;
+  }
+  .switch::after {
+    content: "";
+    position: absolute;
+    width: 15px; height: 15px;
+    border-radius: 50%;
+    background: #fff;
+    top: 3px; left: 3px;
+    transition: left .2s;
+  }
+  .switch.on { background: linear-gradient(135deg, var(--accent), var(--accent2)); }
+  .switch.on::after { left: 20px; }
+
+  .handoff-preview {
+    margin: 0 12px 10px;
+    padding: 9px 10px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 11px;
+    color: var(--muted);
+    line-height: 1.55;
+    max-height: 96px;
+    overflow: hidden;
+    white-space: pre-wrap;
+  }
+  .handoff-preview b { color: var(--yellow); }
+
+  .foot { margin-top: auto; padding: 10px 14px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .foot a { color: var(--muted); text-decoration: none; font-size: 11.5px; cursor: pointer; }
+  .foot a:hover { color: var(--accent); }
+  .foot .quit { color: var(--red); }
+</style>
+</head>
+<body>
+  <div class="brand">
+    <img src="assets/icon.png" alt="">
+    <span class="name">DSH Desktop</span>
+    <span class="ver" id="ver"></span>
+  </div>
+
+  <div class="status" id="dsh-status">
+    <span class="dot" id="status-dot"></span>
+    <span class="txt" id="status-txt">正在检测 DSH…</span>
+  </div>
+
+  <div class="nav">
+    <div class="group-label">功能中心</div>
+    <button data-tab="plugins"><span class="ic">🧩</span>插件中心</button>
+    <button data-tab="recommended"><span class="ic">⭐</span>推荐安装</button>
+    <button data-tab="memory"><span class="ic">🧠</span>上下文记忆</button>
+    <button data-tab="wallpaper"><span class="ic">🎨</span>动态壁纸</button>
+    <button data-tab="about"><span class="ic">ℹ️</span>关于</button>
+    <div class="group-label" style="margin-top:6px">快捷操作</div>
+    <button id="btn-summary"><span class="ic">📝</span>立即生成交接摘要</button>
+    <button id="btn-inject"><span class="ic">📥</span>注入摘要到对话框</button>
+  </div>
+
+  <div id="handoff-box" class="handoff-preview" style="display:none"></div>
+
+  <div class="quick">
+    <div class="row">
+      <span class="lbl"><span class="ic">🧠</span>上下文记忆</span>
+      <button class="switch" id="sw-memory"></button>
+    </div>
+    <div class="row">
+      <span class="lbl"><span class="ic">🎨</span>动态壁纸</span>
+      <button class="switch" id="sw-wallpaper"></button>
+    </div>
+    <button class="btn" id="btn-settings">⚙️ 打开完整设置窗口</button>
+  </div>
+
+  <div class="foot">
+    <a id="lnk-github">GitHub</a>
+    <a id="lnk-quit" class="quit">退出</a>
+  </div>
+
+  <script src="sidebar.js"></script>
+</body>
+</html>

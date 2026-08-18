@@ -35,6 +35,16 @@
       "source": { "local": "example-plugins/hello" }
     },
     {
+      "id": "markdown-export",
+      "name": "Markdown 导出（GitHub 官方）",
+      "kind": "plugin",
+      "recommended": true,
+      "description": "一键把当前 DSH 对话导出为 Markdown 文件（托盘菜单 / IPC）。从 GitHub 官方仓库安装，验证一键安装链路；下载自动走国内镜像兜底。",
+      "author": "DSH Desktop",
+      "tags": ["导出", "markdown", "GitHub"],
+      "source": { "github": "zong-technology/dsh-desktop:plugins/markdown-export" }
+    },
+    {
       "id": "skill-translate",
       "name": "翻译助手 Skill",
       "kind": "skill",

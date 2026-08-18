@@ -29,13 +29,21 @@ class PluginManager {
    * @param {string} opts.settingsFile settings.json 路径
    * @param {object} [opts.env]       运行时环境 { os, arch, electron, dsh, node, app }
    * @param {object} [opts.log]       日志
+   * @param {Function} [opts.onProgress] 安装进度回调 ({stage, message})
    */
-  constructor({ pluginsDir, settingsFile, env = {}, log = console }) {
+  constructor({ pluginsDir, settingsFile, env = {}, log = console, onProgress = null }) {
     this.pluginsDir = pluginsDir;
     this.settingsFile = settingsFile;
     this.env = env;
     this.log = log;
+    this.onProgress = onProgress;
     this._settings = null;
+  }
+
+  _progress(stage, message) {
+    if (typeof this.onProgress === 'function') {
+      try { this.onProgress({ stage, message, at: Date.now() }); } catch { /* ignore */ }
+    }
   }
 
   loadSettings() {
@@ -89,27 +97,41 @@ class PluginManager {
 
   /**
    * 安装插件。失败自动回滚（删除已复制目录）。
-   * @param {string} spec 'owner/repo' | 'owner/repo@tag' | 'owner/repo@latest' | 'https://...zip' | 'local:C:\\dir'
+   * @param {string} spec 'owner/repo[:subdir]' | 'owner/repo@tag[:subdir]' | 'owner/repo@latest[:subdir]' | 'https://...zip' | 'local:C:\\dir'
    */
   async installFromSpec(spec, opts = {}) {
     this.log.log?.(`开始安装: ${spec}`);
+    this._progress('resolve', '解析安装源…');
     const plan = await this._resolvePlan(spec);
     const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'dshplug-'));
     let dest = null;
     try {
       if (plan.kind === 'local') {
+        this._progress('stage', '读取本地目录…');
         await this._stageFromDir(plan.dir, tmp);
       } else {
         const zipPath = path.join(tmp, 'bundle.zip');
+        this._progress('download', `下载 ${plan.url} …`);
         this.log.log?.(`下载 ${plan.url} ...`);
         await this._download(plan.url, zipPath);
+        this._progress('extract', '解压插件包…');
         await this._extractZip(zipPath, path.join(tmp, 'x'));
       }
 
-      const { manifest, root } = await this._findManifest(tmp);
+      // 定位插件根（支持 GitHub 仓库 zip 中的子目录）
+      let manifestBase = path.join(tmp, 'x');
+      if (plan.kind === 'local') {
+        manifestBase = plan.subdir ? path.join(plan.dir, plan.subdir) : path.join(tmp, 'x');
+      } else if (plan.subdir) {
+        const top = await this._findTopDir(path.join(tmp, 'x'));
+        manifestBase = path.join(top, plan.subdir);
+      }
+      this._progress('manifest', '校验插件清单…');
+      const { manifest, root } = await this._findManifest(manifestBase);
       const v = validateManifest(manifest);
       if (!v.ok) throw new Error(`清单无效: ${v.errors.join('; ')}`);
 
+      this._progress('compat', '兼容性检查（OS/架构/版本）…');
       const c = checkCompat(manifest, this.env);
       if (!c.ok) throw new Error(`兼容性检查失败: ${c.errors.join('; ')}`);
 
@@ -127,9 +149,11 @@ class PluginManager {
 
       dest = path.join(this.pluginsDir, manifest.id);
       await fsp.mkdir(this.pluginsDir, { recursive: true });
+      this._progress('copy', `复制到 ${dest} …`);
       await this._copyDir(root, dest);
 
       // —— 测试阶段（安全协议）——
+      this._progress('test', '运行插件测试…');
       await this._runPluginTest(manifest, dest);
 
       // 测试通过 → 注册
@@ -141,11 +165,13 @@ class PluginManager {
         source: spec,
       };
       await this.saveSettings();
+      this._progress('done', `✅ 安装成功: ${manifest.id}@${manifest.version}（测试通过）`);
       this.log.log?.(`✅ 安装成功: ${manifest.id}@${manifest.version} (测试通过)`);
       return { ok: true, manifest, path: dest };
     } catch (err) {
       // —— 回滚：删除已复制目录 ——
       if (dest) await this._safeRemove(dest);
+      this._progress('fail', `❌ 失败，已回滚删除: ${err.message}`);
       this.log.warn?.(`❌ 安装失败，已回滚删除: ${spec} — ${err.message}`);
       return { ok: false, error: err.message, spec };
     } finally {
@@ -179,9 +205,17 @@ class PluginManager {
     spec = String(spec || '').trim();
     if (!spec) throw new Error('安装源为空');
     if (spec.startsWith('local:')) {
-      const dir = spec.slice('local:'.length);
+      const rest = spec.slice('local:'.length);
+      // 支持 local:path:subdir
+      const i = rest.indexOf(':');
+      let dir = rest;
+      let subdir = null;
+      if (i > 0 && fs.existsSync(rest.slice(0, i))) {
+        dir = rest.slice(0, i);
+        subdir = rest.slice(i + 1) || null;
+      }
       if (!fs.existsSync(dir)) throw new Error(`本地目录不存在: ${dir}`);
-      return { kind: 'local', dir, spec };
+      return { kind: 'local', dir, subdir, spec };
     }
     if (/^https?:\/\//.test(spec)) {
       if (!/\.zip(?:[?#]|$)/i.test(spec)) {
@@ -192,9 +226,10 @@ class PluginManager {
       }
       return { kind: 'zip', url: spec, spec };
     }
-    const m = spec.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:@([A-Za-z0-9_.\-]+))?$/);
-    if (!m) throw new Error(`无法识别的安装源: ${spec}（支持 owner/repo、owner/repo@tag、zip URL、local:路径）`);
-    const [, owner, repo, tag] = m;
+    // owner/repo[@tag][:subdir]
+    const m = spec.match(/^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)(?:@([A-Za-z0-9_.\-]+))?(?::([^:]+))?$/);
+    if (!m) throw new Error(`无法识别的安装源: ${spec}（支持 owner/repo[:子目录]、owner/repo@tag、zip URL、local:路径）`);
+    const [, owner, repo, tag, subdir] = m;
     if (!tag || tag === 'latest') {
       // 查最新 release
       const api = `https://api.github.com/repos/${owner}/${repo}/releases/latest`;
@@ -209,11 +244,11 @@ class PluginManager {
         this.log.warn?.(`查询 latest release 失败，回退默认分支: ${e.message}`);
       }
       if (realTag) {
-        return { kind: 'zip', url: `https://codeload.github.com/${owner}/${repo}/zip/refs/tags/${encodeURIComponent(realTag)}`, spec, tag: realTag };
+        return { kind: 'zip', url: `https://codeload.github.com/${owner}/${repo}/zip/refs/tags/${encodeURIComponent(realTag)}`, spec, tag: realTag, subdir: subdir || null };
       }
-      return { kind: 'zip', url: `https://codeload.github.com/${owner}/${repo}/zip/refs/heads/main`, spec };
+      return { kind: 'zip', url: `https://codeload.github.com/${owner}/${repo}/zip/refs/heads/main`, spec, subdir: subdir || null };
     }
-    return { kind: 'zip', url: `https://codeload.github.com/${owner}/${repo}/zip/refs/tags/${encodeURIComponent(tag)}`, spec, tag };
+    return { kind: 'zip', url: `https://codeload.github.com/${owner}/${repo}/zip/refs/tags/${encodeURIComponent(tag)}`, spec, tag, subdir: subdir || null };
   }
 
   async _stageFromDir(dir, tmp) {
@@ -222,11 +257,36 @@ class PluginManager {
     await this._copyDir(dir, path.join(tmp, 'x'));
   }
 
+  /** 下载（GitHub 直连失败时自动走国内镜像） */
   async _download(url, destPath) {
-    const res = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(120000) });
-    if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}: ${url}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    await fsp.writeFile(destPath, buf);
+    const attempts = [url, ...this._mirrorCandidates(url)];
+    let lastErr = null;
+    for (const u of attempts) {
+      try {
+        const res = await fetch(u, { redirect: 'follow', signal: AbortSignal.timeout(60000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const buf = Buffer.from(await res.arrayBuffer());
+        await fsp.writeFile(destPath, buf);
+        if (u !== url) this.log.warn?.(`已通过镜像下载: ${u}`);
+        return;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw new Error(`下载失败（直连与镜像均不可用）: ${lastErr?.message}`);
+  }
+
+  /** 生成 GitHub 下载镜像候选 URL */
+  _mirrorCandidates(url) {
+    let u = url;
+    // codeload zip → github archive URL（镜像普遍只代理 github.com）
+    const cm = url.match(/^https:\/\/codeload\.github\.com\/([^/]+)\/([^/]+)\/zip\/(.+)$/);
+    if (cm) {
+      u = `https://github.com/${cm[1]}/${cm[2]}/archive/${cm[3]}.zip`;
+    }
+    if (!/^https:\/\/github\.com\//.test(u)) return [];
+    const mirrors = ['https://ghfast.top/', 'https://gh-proxy.com/', 'https://mirror.ghproxy.com/'];
+    return mirrors.map((m) => m + u);
   }
 
   async _extractZip(zipPath, destDir) {
@@ -241,6 +301,17 @@ class PluginManager {
     ], { encoding: 'utf8', timeout: 180000 });
     if (ps.status !== 0) {
       throw new Error(`解压失败: tar=${tar.stderr || tar.error?.message} ; powershell=${ps.stderr || ps.error?.message}`);
+    }
+  }
+
+  /** 仓库 zip 解压后顶层目录（GitHub 惯例 repo-tag/） */
+  async _findTopDir(xRoot) {
+    try {
+      const entries = await fsp.readdir(xRoot, { withFileTypes: true });
+      const dir = entries.find((e) => e.isDirectory());
+      return dir ? path.join(xRoot, dir.name) : xRoot;
+    } catch {
+      return xRoot;
     }
   }
 

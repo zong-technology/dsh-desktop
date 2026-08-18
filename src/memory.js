@@ -19,7 +19,7 @@ const DEFAULT_SETTINGS = {
   contextLimit: 128000,      // 上下文窗口估算上限（token）
   summarizeAt: 0.7,          // 达到该比例时触发总结
   deepseekApiKey: '',        // 可选：LLM 总结
-  autoInjectHandoff: false,  // 可选：下次启动自动注入交接摘要到对话框（默认关闭，避免改动 DSH 页面）
+  autoInjectHandoff: true,   // 下次启动自动注入交接摘要到对话框
 };
 
 class MemoryService {
@@ -163,50 +163,89 @@ class MemoryService {
     }
   }
 
-  /** 规则总结：开头要点 + 结尾最近内容 + 高频关键词，保持简洁 */
+  /** 规则总结：结构化完整摘要（目标/待办/结论/最近内容/关键词） */
   _summarizeRules(text) {
-    const lines = String(text || '')
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
-
+    const raw = String(text || '');
+    const lines = raw.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
     if (!lines.length) return '（对话内容为空）';
 
-    const head = lines.slice(0, 8);
-    const tail = lines.slice(-40);
+    const isHeading = (l) => /^(#{1,6}\s|【[^】]+】)/.test(l) || (/^[-*•]\s/.test(l) && l.length <= 120);
+    const isCode = (l) => /^[`~]{3}/.test(l) || /^\s{2,}/.test(l);
+    const isQuestion = (l) => /[?？]$/.test(l);
 
-    // 挑出标题/列表类要点
-    const points = [];
-    for (const l of head) {
-      if (/^(#+\s|[-*•]\s|\d+[.、]\s|【|\[.*\]\s)/.test(l) && l.length <= 200) points.push(l);
-      if (points.length >= 6) break;
+    // —— 目标 / 开头要点 ——
+    const head = [];
+    for (const l of lines.slice(0, 30)) {
+      if (isCode(l)) continue;
+      if (isHeading(l) || isQuestion(l) || head.length < 4) {
+        if (head.length >= 8) break;
+        head.push(l.length > 140 ? l.slice(0, 140) + '…' : l);
+      }
     }
 
-    // 高频关键词（排除停用词）
+    // —— 待办 / 未完成 ——
+    const todo = [];
+    const todoRx = /(待办|TODO|未完成|还没|下一步|接下来|需要(做|完成|处理)|别忘了|记得|之后要|计划|待处理)/i;
+    for (const l of lines) {
+      if (isCode(l)) continue;
+      if (todoRx.test(l) && l.length <= 200) {
+        todo.push(l);
+        if (todo.length >= 10) break;
+      }
+    }
+
+    // —— 结论 / 关键决策 ——
+    const done = [];
+    const doneRx = /(结论|决定|确定|完成|已解决|搞定|同意|最终|方案|选择|结果是|已生成|已写入)/i;
+    for (const l of lines.slice(-Math.min(lines.length, 800))) {
+      if (isCode(l)) continue;
+      if (doneRx.test(l) && l.length <= 200) {
+        done.push(l);
+        if (done.length >= 10) break;
+      }
+    }
+
+    // —— 最近内容（结尾，尽量完整） ——
+    const tail = lines.slice(-100).filter((l) => !isCode(l)).slice(-30);
+
+    // —— 关键词 ——
     const stop = new Set([
       '的', '了', '是', '我', '你', '他', '她', '它', '们', '这', '那', '在', '和', '与', '就', '都', '而', '及', '着',
       '或', '一个', '我们', '你们', '可以', '什么', '怎么', '为什么', '因为', '所以', '但是', '如果', '没有', '这个', '那个',
       'the', 'a', 'an', 'is', 'are', 'was', 'to', 'of', 'and', 'or', 'in', 'on', 'for', 'with', 'that', 'this', 'it',
     ]);
     const freq = new Map();
-    const words = (text.match(/[A-Za-z][A-Za-z0-9_-]{2,}|[\u4e00-\u9fff]{2,6}/g) || []).slice(-2000);
+    const words = (raw.match(/[A-Za-z][A-Za-z0-9_-]{2,}|[\u4e00-\u9fff]{2,6}/g) || []).slice(-3000);
     for (const w of words) {
       const k = w.toLowerCase();
       if (stop.has(k)) continue;
       freq.set(k, (freq.get(k) || 0) + 1);
     }
-    const top = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([w]) => w);
+    const top = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([w]) => w);
 
     const parts = [];
-    parts.push('**对话目标/开头要点**');
-    for (const p of points) parts.push(`- ${p}`);
+    parts.push('# 📋 会话交接摘要（自动生成）');
     parts.push('');
-    parts.push('**最近讨论（结尾）**');
-    for (const l of tail.slice(-12)) parts.push(`- ${l.length > 120 ? l.slice(0, 120) + '…' : l}`);
+    parts.push('**会话主题/目标**');
+    if (head.length) for (const p of head) parts.push(`- ${p}`);
+    else parts.push('- （未能提取，请在下方最近内容中查看）');
+    parts.push('');
+    if (todo.length) {
+      parts.push('**未完成 / 待办**');
+      for (const p of todo) parts.push(`- ${p}`);
+      parts.push('');
+    }
+    if (done.length) {
+      parts.push('**结论 / 已完成**');
+      for (const p of done) parts.push(`- ${p}`);
+      parts.push('');
+    }
+    parts.push(`**最近讨论（结尾 ${tail.length} 条）**`);
+    for (const l of tail) parts.push(`- ${l.length > 160 ? l.slice(0, 160) + '…' : l}`);
     parts.push('');
     if (top.length) parts.push(`**关键词**：${top.join('、')}`);
     parts.push('');
-    parts.push('> 提示：把以上内容粘贴到新会话开头，即可恢复上下文。');
+    parts.push('> 💡 使用方式：摘要已自动注入新会话输入框（或复制上方内容），发送给模型即可无缝衔接上下文。');
     return parts.join('\n');
   }
 

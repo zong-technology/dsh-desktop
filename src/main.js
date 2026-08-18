@@ -10,7 +10,7 @@
  *   - 内置插件：wallpaper-plugin（壁纸）、memory-plugin（记忆）可独立开关
  *   - 托盘 + 设置窗口
  */
-const { app, BrowserWindow, Tray, Menu, ipcMain, shell, clipboard, dialog, nativeImage, Notification } = require('electron');
+const { app, BrowserWindow, WebContentsView, Tray, Menu, ipcMain, shell, clipboard, dialog, nativeImage, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -43,6 +43,9 @@ const DEFAULTS = {
 
 let mainWindow = null;
 let settingsWindow = null;
+let sidebarView = null;   // 左侧功能边栏
+let dshView = null;       // DSH Web GUI 视图
+let dshConnected = false;
 let tray = null;
 let pluginManager = null;
 let memoryService = null;
@@ -78,15 +81,33 @@ function pluginEnabled(id) {
 
 // ================= 窗口 =================
 
+const SIDEBAR_WIDTH = 252;
+
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
-    minWidth: 900,
-    minHeight: 600,
+    minWidth: 1000,
+    minHeight: 620,
     title: 'DSH Desktop',
     icon: path.join(UI_DIR, 'assets', 'icon.png'),
     backgroundColor: '#0f1115',
+    show: false,
+  });
+  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.on('resize', layoutViews);
+
+  // —— 左侧功能边栏 ——
+  sidebarView = new WebContentsView({
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: path.join(SRC_DIR, 'preload.js'),
+    },
+  });
+  // —— DSH GUI 视图 ——
+  dshView = new WebContentsView({
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -95,24 +116,60 @@ function createMainWindow() {
     },
   });
 
-  mainWindow.webContents.on('did-finish-load', () => {
-    maybeInjectWatcher();
-    mainWindow.setTitle('DSH Desktop');
+  mainWindow.contentView.addChildView(sidebarView);
+  mainWindow.contentView.addChildView(dshView);
+
+  sidebarView.webContents.loadFile(path.join(UI_DIR, 'sidebar.html'));
+  sidebarView.webContents.on('did-finish-load', () => {
+    pushDshStatus();
   });
-  mainWindow.webContents.on('did-navigate', () => maybeInjectWatcher());
-  mainWindow.webContents.on('did-fail-load', (_e, code, desc, validatedURL, isMainFrame) => {
-    if (isMainFrame && validatedURL.startsWith('http')) {
-      mainWindow.loadFile(path.join(UI_DIR, 'offline.html'), { query: { url: appSettings.dshUrl } });
+
+  dshView.webContents.on('did-finish-load', () => {
+    const url = dshView.webContents.getURL();
+    if (url.startsWith('http')) setDshStatus(true);
+    maybeInjectWatcher();
+  });
+  dshView.webContents.on('did-navigate', () => {
+    const url = dshView.webContents.getURL();
+    if (url.startsWith('http')) setDshStatus(true);
+    maybeInjectWatcher();
+  });
+  dshView.webContents.on('did-fail-load', (_e, code, desc, validatedURL, isMainFrame) => {
+    if (isMainFrame) {
+      setDshStatus(false);
+      if (validatedURL.startsWith('http')) {
+        dshView.webContents.loadFile(path.join(UI_DIR, 'offline.html'), { query: { url: appSettings.dshUrl } });
+      }
     }
   });
 
+  layoutViews();
   loadDsh();
   return mainWindow;
 }
 
+function layoutViews() {
+  if (!mainWindow || mainWindow.isDestroyed() || !sidebarView || !dshView) return;
+  const [w, h] = mainWindow.getContentSize();
+  sidebarView.setBounds({ x: 0, y: 0, width: SIDEBAR_WIDTH, height: h });
+  dshView.setBounds({ x: SIDEBAR_WIDTH, y: 0, width: Math.max(0, w - SIDEBAR_WIDTH), height: h });
+}
+
+function setDshStatus(connected) {
+  const changed = dshConnected !== connected;
+  dshConnected = connected;
+  if (changed) pushDshStatus();
+}
+
+function pushDshStatus() {
+  if (sidebarView && !sidebarView.webContents.isDestroyed()) {
+    sidebarView.webContents.send('dsh:status', { connected: dshConnected, url: appSettings.dshUrl });
+  }
+}
+
 async function loadDsh() {
   try {
-    await mainWindow.loadURL(appSettings.dshUrl);
+    await dshView.webContents.loadURL(appSettings.dshUrl);
   } catch (e) {
     // did-fail-load 会接管
   }
@@ -120,10 +177,10 @@ async function loadDsh() {
 
 function maybeInjectWatcher() {
   if (!pluginEnabled('memory-plugin')) return;
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  const url = mainWindow.webContents.getURL();
+  if (!dshView || dshView.webContents.isDestroyed()) return;
+  const url = dshView.webContents.getURL();
   if (!url.startsWith('http')) return; // 只在 DSH 页面注入
-  mainWindow.webContents
+  dshView.webContents
     .executeJavaScript(watcherScript, true)
     .catch(() => { /* 页面可能尚未就绪，忽略 */ });
 }
@@ -310,7 +367,9 @@ function registerIpc() {
 
   ipcMain.handle('plugins:list', () => pluginManager.list());
   ipcMain.handle('plugins:install', async (_e, spec) => {
-    const r = await pluginManager.installFromSpec(String(spec || '').trim());
+    const r = await pluginManager.installFromSpec(String(spec || '').trim(), {
+      onProgress: (p) => broadcast('plugin:install-progress', p),
+    });
     if (r.ok) {
       // 尝试热激活（main 插件需重启后完全生效，这里只提示）
       rebuildTray();
@@ -392,13 +451,29 @@ function registerIpc() {
   ipcMain.handle('memory:handoff', () => memoryService.getHandoff());
   ipcMain.handle('memory:conversations', () => memoryService.listConversations());
   ipcMain.handle('memory:inject-handoff', async () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: '主窗口未打开' };
+    if (!dshView || dshView.webContents.isDestroyed()) return { ok: false, error: '主窗口未打开' };
     const handoff = await memoryService.getHandoff();
     if (!handoff) return { ok: false, error: '暂无交接摘要' };
-    const ok = await mainWindow.webContents
+    const ok = await dshView.webContents
       .executeJavaScript(injectHandoffScript(handoff.summary), true)
       .catch(() => false);
     return { ok: !!ok, error: ok ? null : '未能注入（对话框可能不可用，请手动复制粘贴）' };
+  });
+
+  // —— 左侧边栏 ——
+  ipcMain.handle('dsh:status', () => ({ connected: dshConnected, url: appSettings.dshUrl }));
+  ipcMain.handle('settings:open', (_e, tab) => {
+    const w = createSettingsWindow();
+    if (typeof tab === 'string' && tab) {
+      setTimeout(() => {
+        if (w && !w.isDestroyed()) w.webContents.send('nav-to', tab);
+      }, 300);
+    }
+    return { ok: true };
+  });
+  ipcMain.handle('app:quit', () => {
+    app.quit();
+    return { ok: true };
   });
 
   ipcMain.handle('wallpaper:state', () => ({
@@ -545,6 +620,12 @@ async function boot() {
 
 function createTray() {
   rebuildTray();
+}
+
+/** 向所有 UI 窗口广播事件 */
+function broadcast(channel, data) {
+  if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.webContents.send(channel, data);
+  if (sidebarView && !sidebarView.webContents.isDestroyed()) sidebarView.webContents.send(channel, data);
 }
 
 app.on('second-instance', () => {
