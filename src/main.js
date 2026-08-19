@@ -24,6 +24,7 @@ const PluginManager = require('./plugin-manager');
 const MemoryService = require('./memory');
 const WallpaperEngine = require('./wallpaper');
 const Registry = require('./registry');
+const QQBridge = require('./qq-bridge');
 const { watcherScript, injectHandoffScript } = require('./inject-watcher');
 
 // —— 命令行开关：避免隐藏壁纸窗口被 OCR/遮挡逻辑挂起 ——
@@ -50,6 +51,7 @@ let pluginManager = null;
 let memoryService = null;
 let wallpaperEngine = null;
 let registry = null;
+let qqBridge = null;
 let appSettings = null;
 let activePlugins = new Map(); // id -> { mod, deactivate }
 let wpCssKeys = []; // 已注入的壁纸透明化 CSS key（guest 页面内）
@@ -77,6 +79,8 @@ function loadAppSettings() {
   if (appSettings.wallpaper.opacity === undefined) {
     appSettings.wallpaper.opacity = 100;
   }
+  // QQ 同步桥默认设置
+  appSettings.qq = appSettings.qq || { enabled: false, apiUrl: 'http://127.0.0.1:3000', listenPort: 18777, allowedUsers: '', prefix: '' };
   return appSettings;
 }
 
@@ -88,6 +92,46 @@ function saveAppSettings() {
 function pluginEnabled(id) {
   loadAppSettings();
   return !!appSettings.plugins[id]?.enabled;
+}
+
+// ================= Skill 同步（写入 DSH skills 目录） =================
+// DSH 从 ~/.dsh/skills/<id>/SKILL.md 加载技能（YAML frontmatter + body）。
+// 启用的 skill 落盘 → DSH 实际生效；关闭的删除。
+
+const DSH_SKILLS_DIR = () => path.join(app.getPath('home'), '.dsh', 'skills');
+
+function skillMarkdown(s) {
+  return `---
+name: ${s.name || s.id}
+description: ${(s.description || '').split('\n')[0]}
+---
+${s.prompt || s.description || ''}
+`;
+}
+
+async function syncSkillsToDsh() {
+  try {
+    const r = await registry.getRecommended();
+    const skills = (r.items || []).filter((i) => i.kind === 'skill' && i.id);
+    if (!skills.length) return;
+    const root = DSH_SKILLS_DIR();
+    fs.mkdirSync(root, { recursive: true });
+    let on = 0;
+    for (const s of skills) {
+      const enabled = !!appSettings.plugins[s.id]?.enabled;
+      const dir = path.join(root, s.id);
+      if (enabled) {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'SKILL.md'), skillMarkdown(s), 'utf8');
+        on++;
+      } else {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
+    console.log(`[skill] 同步完成: 启用 ${on} / 共 ${skills.length} 个 Skill → ${root}`);
+  } catch (e) {
+    console.warn('[skill] 同步失败: ' + e.message);
+  }
 }
 
 // ================= 窗口 =================
@@ -546,7 +590,25 @@ function registerIpc() {
     if (r.ok) {
       if (id === 'wallpaper-plugin') await applyWallpaperPlugin();
       if (id === 'memory-plugin') maybeInjectWatcher();
+      // skill 开关 → 同步写入 DSH skills 目录（~/.dsh/skills/<id>/SKILL.md）
+      await syncSkillsToDsh();
     }
+    return r;
+  });
+
+  ipcMain.handle('qq:settings:get', () => appSettings.qq || {});
+  ipcMain.handle('qq:settings:set', async (_e, patch) => {
+    patch = patch || {};
+    appSettings.qq = { ...(appSettings.qq || {}), ...patch };
+    if (patch.allowedUsers !== undefined) appSettings.qq.allowedUsers = String(patch.allowedUsers || '').trim();
+    if (patch.prefix !== undefined) appSettings.qq.prefix = String(patch.prefix || '').trim();
+    saveAppSettings();
+    if (qqBridge) qqBridge.sync();
+    return appSettings.qq;
+  });
+  ipcMain.handle('qq:test', async () => {
+    if (!qqBridge) return { ok: false, error: '桥接未初始化' };
+    const r = await qqBridge.test();
     return r;
   });
 
@@ -783,6 +845,8 @@ function maybeInjectWatcherRemoval() {
 app.whenReady().then(async () => {
   try {
     await boot();
+    // Skill 开关 → 同步到 DSH skills 目录（~/.dsh/skills）
+    syncSkillsToDsh();
     if (process.env.DSH_DESKTOP_SMOKE === '1') {
       console.log('[smoke] app boot OK');
       setTimeout(() => {
@@ -860,6 +924,43 @@ async function boot() {
     remoteUrl: appSettings.registryUrl,
     log: console,
   });
+
+  // QQ 同步桥：QQ 消息 → DSH 页面 → 回复回 QQ
+  const qqPending = []; // [{ text, resolve, timer }]
+  qqBridge = new QQBridge({
+    log: console,
+    getSettings: () => appSettings.qq || {},
+    onAsk: (text) =>
+      new Promise((resolve, reject) => {
+        if (!guestContents || guestContents.isDestroyed()) {
+          reject(new Error('DSH 页面未就绪'));
+          return;
+        }
+        const timer = setTimeout(() => {
+          const i = qqPending.findIndex((p) => p.timer === timer);
+          if (i >= 0) qqPending.splice(i, 1);
+          reject(new Error('DSH 回复超时（10 秒）'));
+        }, 10000);
+        qqPending.push({ text, resolve, timer });
+        guestContents.send('qq:ask', text);
+      }),
+  });
+  // preload → 主进程：DSH 页面回复
+  ipcMain.on('qq:answer', (_e, reply) => {
+    const p = qqPending.shift();
+    if (p) {
+      clearTimeout(p.timer);
+      p.resolve(reply);
+    }
+  });
+  ipcMain.on('qq:answer-error', (_e, err) => {
+    const p = qqPending.shift();
+    if (p) {
+      clearTimeout(p.timer);
+      p.reject(new Error(err || 'DSH 回复失败'));
+    }
+  });
+  if (appSettings.qq) qqBridge.sync();
 
   registerIpc();
   createMainWindow();
