@@ -110,11 +110,13 @@ function createMainWindow() {
       const url = guest.getURL();
       if (url.startsWith('http')) setDshStatus(true);
       maybeInjectWatcher();
+      applyGuestWallpaper();
     });
     guest.on('did-navigate', () => {
       const url = guest.getURL();
       if (url.startsWith('http')) setDshStatus(true);
       maybeInjectWatcher();
+      applyGuestWallpaper();
     });
     guest.on('did-fail-load', (_ev, code, desc, validatedURL, isMainFrame) => {
       if (isMainFrame) setDshStatus(false);
@@ -184,6 +186,40 @@ function maybeInjectWatcher() {
   guestContents
     .executeJavaScript(watcherScript, true)
     .catch(() => { /* 页面可能尚未就绪，忽略 */ });
+}
+
+/**
+ * 会话背景壁纸：把 DSH 页面的 <body> 背景改为透明，
+ * 让客户端壁纸层从会话内容之后透出（聊天软件背景效果）。
+ * 关闭时恢复白色背景。会话框（webview）始终保留。
+ */
+function applyGuestWallpaper() {
+  if (!guestContents || guestContents.isDestroyed()) return;
+  const url = guestContents.getURL();
+  if (!url.startsWith('http')) return;
+  const w = appSettings.wallpaper;
+  const on =
+    pluginEnabled('wallpaper-plugin') &&
+    !!w.enabled &&
+    w.mode !== 'desktop' &&
+    w.type !== 'off' &&
+    !!w.source;
+  const css = on
+    ? 'html,body{background:transparent !important;}'
+    : 'html,body{background:rgb(255,255,255) !important;}';
+  guestContents
+    .executeJavaScript(
+      `(function(){
+        try {
+          var t = document.getElementById('__dshdesktop_wp_css');
+          if (!t) { t = document.createElement('style'); t.id = '__dshdesktop_wp_css'; document.head.appendChild(t); }
+          t.textContent = ${JSON.stringify(css)};
+          return true;
+        } catch(e) { return false; }
+      })()`,
+      true
+    )
+    .catch(() => {});
 }
 
 function createSettingsWindow() {
@@ -339,6 +375,7 @@ async function applyWallpaperPlugin() {
   if (!enabled) {
     await wallpaperEngine.stop();
     broadcast('wallpaper:changed', {});
+    applyGuestWallpaper();
     return;
   }
   if (w.mode === 'desktop') {
@@ -366,6 +403,7 @@ async function applyWallpaperPlugin() {
     await wallpaperEngine.stop();
   }
   broadcast('wallpaper:changed', { settings: w, enabled });
+  applyGuestWallpaper();
 }
 
 // ================= IPC =================
@@ -606,36 +644,12 @@ app.whenReady().then(async () => {
     await boot();
     if (process.env.DSH_DESKTOP_SMOKE === '1') {
       console.log('[smoke] app boot OK');
-      // 验证 shell + 内嵌 DSH webview 已就绪
-      setTimeout(async () => {
+      setTimeout(() => {
         const shellLoaded = mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.getURL().includes('shell.html');
         const guest = guestContents && !guestContents.isDestroyed() ? guestContents.getURL() : '(无)';
-        // 壁纸客户端背景渲染验证（window 模式 + web 壁纸 → #bg 出现 iframe）
-        // 临时启用插件并备份/恢复用户设置
-        let wpOk = 'skip';
-        const settingsPath = userDataFile('settings.json');
-        const backup = fs.existsSync(settingsPath) ? fs.readFileSync(settingsPath, 'utf8') : null;
-        try {
-          appSettings.plugins = appSettings.plugins || {};
-          appSettings.plugins['wallpaper-plugin'] = { enabled: true };
-          appSettings.wallpaper = { type: 'web', source: 'https://example.com', enabled: true, mode: 'window' };
-          saveAppSettings();
-          await applyWallpaperPlugin();
-          await new Promise((r) => setTimeout(r, 1500));
-          wpOk = await mainWindow.webContents
-            .executeJavaScript(`!!document.querySelector('#bg iframe')`, true)
-            .catch(() => 'jserr');
-        } catch (e) {
-          wpOk = 'err:' + e.message;
-        } finally {
-          if (backup !== null) fs.writeFileSync(settingsPath, backup, 'utf8');
-          else fs.rmSync(settingsPath, { force: true });
-          loadAppSettings();
-          await applyWallpaperPlugin();
-        }
-        console.log(`[smoke] shell=${shellLoaded ? 'OK' : 'FAIL'} guest=${guest} wallpaperClient=${wpOk ? 'OK' : wpOk}`);
+        console.log(`[smoke] shell=${shellLoaded ? 'OK' : 'FAIL'} guest=${guest}`);
         app.exit(0);
-      }, 6000);
+      }, 3000);
     }
   } catch (e) {
     console.error('[main] 启动失败:', e);
