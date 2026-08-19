@@ -1,0 +1,16 @@
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const dir = process.env.PLUGIN_DIR;
+try {
+  if (!dir) throw new Error('缺少 PLUGIN_DIR');
+  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+  if (manifest.id !== 'quick-prompts') throw new Error(`id 不符: ${manifest.id}`);
+  const src = fs.readFileSync(path.join(dir, 'main.js'), 'utf8');
+  if (!src.includes('PROMPTS') || !src.includes('clipboard')) throw new Error('main.js 结构不完整');
+  console.log('[quick-prompts] 测试通过 ✅');
+  process.exit(0);
+} catch (e) {
+  console.error(`[quick-prompts] 测试失败 ❌: ${e.message}`);
+  process.exit(1);
+}
