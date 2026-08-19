@@ -30,7 +30,7 @@ async function refreshDshStatus() {
   $('#status-txt').textContent = s.connected ? 'DSH 已连接' : 'DSH 未连接';
   $('#offline-url').textContent = s.url || '';
   $('#offline').classList.toggle('show', !s.connected);
-  if (!s.connected) $('#dsh').classList.add('hidden');
+  $('#dsh').classList.toggle('hidden', !s.connected);
 }
 
 async function refreshHandoffPreview() {
@@ -138,7 +138,7 @@ async function renderWallpaper() {
   bg.appendChild(shade);
 }
 
-/** 预览壁纸：隐藏 DSH 内容，露出壁纸背景 4 秒 */
+/** 预览/确认壁纸背景：会话框始终保留，壁纸作为会话背景直接可见 */
 function previewWallpaper() {
   if (!wpState || !wpState.active) {
     toast('壁纸未开启，请先在 壁纸 页设置来源', 'err');
@@ -148,16 +148,7 @@ function previewWallpaper() {
     toast('当前为系统桌面壁纸模式，客户端内不显示背景', 'err');
     return;
   }
-  $('#dsh').classList.add('hidden');
-  $('#wp-badge').textContent = '🎨 壁纸预览中…（点击任意处退出）';
-  $('#wp-badge').classList.add('show');
-  const exit = () => {
-    $('#dsh').classList.remove('hidden');
-    $('#wp-badge').textContent = '🎨 客户端壁纸已开启';
-    document.removeEventListener('click', exit);
-  };
-  setTimeout(exit, 4000);
-  document.addEventListener('click', exit);
+  toast('🎨 壁纸已是会话背景（对话内容正常显示在壁纸上）', 'ok');
 }
 
 async function init() {
