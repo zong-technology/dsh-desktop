@@ -131,6 +131,11 @@
         <span style="color:var(--muted)">轮换间隔（秒，目录模式生效）</span>
         <input type="number" id="wp-interval" min="5" max="3600" value="60" style="width:90px;padding:6px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text)">
       </div>
+      <div class="row" style="margin-top:10px">
+        <span style="color:var(--muted);flex-shrink:0">背景透明度（遮罩深浅，文字更清晰）</span>
+        <input type="range" id="wp-opacity" min="0" max="90" step="5" value="55" style="flex:1">
+        <span id="wp-opacity-val" style="width:38px;text-align:right;color:var(--text)">55</span>
+      </div>
       <div id="wp-state" class="metric"></div>
     </div>
   </section>
