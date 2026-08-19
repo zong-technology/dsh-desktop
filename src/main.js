@@ -52,6 +52,7 @@ let wallpaperEngine = null;
 let registry = null;
 let appSettings = null;
 let activePlugins = new Map(); // id -> { mod, deactivate }
+let wpCssKeys = []; // 已注入的壁纸透明化 CSS key（guest 页面内）
 
 function userDataFile(name) {
   return path.join(app.getPath('userData'), name);
@@ -114,12 +115,14 @@ function createMainWindow() {
     guest.on('did-finish-load', () => {
       const url = guest.getURL();
       if (url.startsWith('http')) setDshStatus(true);
+      wpCssKeys = []; // 页面重载后旧 CSS key 失效，需重新注入
       maybeInjectWatcher();
       applyGuestWallpaper();
     });
     guest.on('did-navigate', () => {
       const url = guest.getURL();
       if (url.startsWith('http')) setDshStatus(true);
+      wpCssKeys = [];
       maybeInjectWatcher();
       applyGuestWallpaper();
     });
@@ -200,6 +203,37 @@ function maybeInjectWatcher() {
  *  页面透明处直接透出 webview 元素（默认透明背景）之后的壁纸层；
  *  关闭时还原记录的原始背景色。会话框（webview）始终保留。
  */
+/**
+ * 会话背景壁纸：让 DSH 会话界面透出壁纸（聊天软件背景效果）。
+ * 采用 insertCSS（CSS 引擎注入，不执行 JS——DSH 页面执行复杂 JS 脚本会失败）：
+ *  1. 结构透明：html/body/body>div/#root 及其直接子层背景透明
+ *  2. token 重映射：DSH 官方页面背景 CSS 变量（--dsw-alias-bg-*）→ 透明，
+ *     让会话列表/内容区/遮罩等所有页面级背景透出壁纸；控件类 token
+ *     （按钮/输入框/边框/文字）不受影响，界面保持可读。
+ *  关闭时 removeInsertedCSS 恢复原样。会话框（webview）始终保留。
+ */
+function wallpaperCss() {
+  return `
+    html, body { background: transparent !important; }
+    body > div, #root, #root > div, #root > main, #root > section, #root > aside, #root > nav { background: transparent !important; }
+    * {
+      --dsw-alias-bg-base: transparent !important;
+      --dsw-alias-bg-layer-1: transparent !important;
+      --dsw-alias-bg-layer-2: transparent !important;
+      --dsw-alias-bg-layer-3: transparent !important;
+      --dsw-alias-bg-mask-1: transparent !important;
+      --dsw-alias-bg-mask-2: transparent !important;
+      --dsw-alias-bg-mask-3: transparent !important;
+      --dsw-alias-bg-mask-drop: transparent !important;
+      --dsw-alias-bg-mask-photo: transparent !important;
+      --dsw-alias-bg-module-platform: transparent !important;
+      --dsw-alias-bg-multi-select: transparent !important;
+      --dsw-alias-bg-overlay: transparent !important;
+      --dsw-alias-bg-skeleton: transparent !important;
+    }
+  `;
+}
+
 function applyGuestWallpaper() {
   if (!guestContents || guestContents.isDestroyed()) return;
   const url = guestContents.getURL();
@@ -211,34 +245,18 @@ function applyGuestWallpaper() {
     w.mode !== 'desktop' &&
     w.type !== 'off' &&
     !!w.source;
-  guestContents
-    .executeJavaScript(
-      `(function(){
-        try {
-          var on = ${on ? 'true' : 'false'};
-          var d = document;
-          if (!d.__dshwp_orig) d.__dshwp_orig = {};
-          ['html','body'].forEach(function(sel){
-            var el = d.querySelector(sel);
-            if (!el) return;
-            if (d.__dshwp_orig[sel] === undefined) {
-              var o = getComputedStyle(el).backgroundColor;
-              d.__dshwp_orig[sel] = (o && o !== 'rgba(0, 0, 0, 0)' && o !== 'transparent') ? o : null;
-            }
-            if (on) {
-              el.style.setProperty('background', 'transparent', 'important');
-            } else {
-              var orig = d.__dshwp_orig[sel];
-              if (orig) el.style.setProperty('background', orig, 'important');
-              else el.style.removeProperty('background');
-            }
-          });
-          return true;
-        } catch(e) { return false; }
-      })()`,
-      true
-    )
-    .catch(() => {});
+  if (on) {
+    if (wpCssKeys.length > 0) return; // 已注入
+    guestContents
+      .insertCSS(wallpaperCss())
+      .then((key) => wpCssKeys.push(key))
+      .catch(() => {});
+  } else {
+    if (wpCssKeys.length === 0) return;
+    const keys = wpCssKeys;
+    wpCssKeys = [];
+    Promise.all(keys.map((k) => guestContents.removeInsertedCSS(k).catch(() => {}))).catch(() => {});
+  }
 }
 
 function createSettingsWindow() {
@@ -708,27 +726,37 @@ app.whenReady().then(async () => {
       }, 3000);
     }
     if (process.env.DSH_DESKTOP_WP_DEBUG === '1') {
-      // 壁纸调试：打印 guest body 背景 + shell 壁纸视频状态（用真实用户设置）
+      // 壁纸调试：验证 insertCSS（CSS 注入，不执行 JS）能否透明化 DSH 页面
       setTimeout(async () => {
         try {
-          const gb = guestContents && !guestContents.isDestroyed()
-            ? await guestContents.executeJavaScript(`getComputedStyle(document.body).backgroundColor`, true).catch((e) => 'ERR:' + e.message)
+          const css = `
+            html, body { background: transparent !important; }
+            body > div, #root, #root > div, #root > main, #root > section, #root > aside { background: transparent !important; }
+          `;
+          const key = guestContents && !guestContents.isDestroyed()
+            ? await guestContents.insertCSS(css).catch((e) => 'CSSERR:' + e.message)
             : 'NO_GUEST';
-          const shell = mainWindow && !mainWindow.isDestroyed()
-            ? await mainWindow.webContents.executeJavaScript(`(() => {
-                const bg = document.getElementById('bg');
-                const v = document.querySelector('#bg video');
-                return { bgClass: bg ? bg.className : null, hasVideo: !!v, src: v ? v.src : null, vErr: v && v.error ? v.error.code : null, badge: document.getElementById('wp-badge') ? document.getElementById('wp-badge').className : null };
+          console.log(`[wp-debug] insertCSS=${String(key).slice(0, 30)}`);
+          // 简单查询验证（尽量短小）
+          const probe = guestContents && !guestContents.isDestroyed()
+            ? await guestContents.executeJavaScript(`(function(){
+                try {
+                  var out = { bodyBg: getComputedStyle(document.body).backgroundColor };
+                  var root = document.querySelector('#root');
+                  if (root) out.rootBg = getComputedStyle(root).backgroundColor;
+                  var div = document.body.children.length > 1 ? document.body.children[1] : null;
+                  if (div && div.tagName === 'DIV') out.mainDivBg = getComputedStyle(div).backgroundColor;
+                  return JSON.stringify(out);
+                } catch(e) { return 'ERR:' + e.message; }
               })()`, true).catch((e) => 'ERR:' + e.message)
-            : 'NO_WIN';
-          console.log(`[wp-debug] guestBodyBg=${gb}`);
-          console.log(`[wp-debug] shell=${JSON.stringify(shell)}`);
+            : 'NO_GUEST';
+          console.log(`[wp-debug] probe=${probe}`);
           console.log(`[wp-debug] settings=${JSON.stringify(appSettings.wallpaper)}`);
         } catch (e) {
           console.log('[wp-debug] 异常:', e.message);
         }
         app.exit(0);
-      }, 10000);
+      }, 12000);
     }
   } catch (e) {
     console.error('[main] 启动失败:', e);
