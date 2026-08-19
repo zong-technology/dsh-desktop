@@ -112,7 +112,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   font-weight: 400;
 }
 .badge.green { color: var(--green); border-color: rgba(52,199,89,.4); }
-
+.badge.blue { color: var(--blue, #0a84ff); border-color: rgba(10,132,255,.4); }
 .prow {
   display: flex;
   align-items: center;
@@ -168,6 +168,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .kind.plugin { background: rgba(79,140,255,.15); color: #7fb0ff; }
 .kind.skill { background: rgba(124,92,255,.15); color: #b39bff; }
 .kind.builtin { background: rgba(52,199,89,.15); color: #6fe08c; }
+.kind.dsh { background: rgba(255,159,10,.15); color: #ffb04d; }
 
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .form-item label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 5px; }
