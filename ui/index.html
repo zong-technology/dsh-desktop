@@ -18,6 +18,7 @@
     <button data-tab="recommended">🛒 插件市场</button>
     <button data-tab="memory">🧠 记忆</button>
     <button data-tab="wallpaper">🎨 壁纸</button>
+    <button data-tab="qq">💬 QQ 同步</button>
     <button data-tab="about">ℹ️ 关于</button>
   </nav>
   <div class="side-foot">DSH Desktop · 设置</div>
@@ -158,6 +159,47 @@
         <span id="wp-opacity-val" style="width:38px;text-align:right;color:var(--text)">100</span>
       </div>
       <div id="wp-state" class="metric"></div>
+    </div>
+  </section>
+
+  <!-- ============ QQ 同步 ============ -->
+  <section id="tab-qq" class="tab">
+    <div class="card">
+      <h3>💬 QQ 同步（QQ 机器人双向对话）</h3>
+      <p class="hint">
+        在 QQ 里给机器人发消息 → 自动转发给当前 DSH 会话 → AI 回复同步回 QQ。<br>
+        <b style="color:var(--yellow)">需要 NapCat（OneBot 11）</b>：
+        ① 安装并登录 NapCat（QQ NT 内核）；② 开启 HTTP 服务器（默认端口 <code>3000</code>）；
+        ③ 开启「HTTP 上报」，上报地址填 <code>http://127.0.0.1:18777/onebot</code>。
+        详细步骤见 <b>关于页</b> 里的部署说明。
+      </p>
+      <div class="row">
+        <label class="switch-onoff">
+          <button id="qq-enable" class="switch" title="启用/停用"></button>
+          <span id="qq-enable-label">已停用</span>
+        </label>
+        <button id="qq-test" class="primary">测试连接</button>
+      </div>
+      <div id="qq-test-result" class="result" style="margin-top:6px"></div>
+      <div class="row" style="margin-top:10px">
+        <span style="color:var(--muted);flex-shrink:0;width:110px">NapCat API 地址</span>
+        <input type="text" id="qq-apiurl" placeholder="http://127.0.0.1:3000" spellcheck="false" style="flex:1">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <span style="color:var(--muted);flex-shrink:0;width:110px">事件监听端口</span>
+        <input type="number" id="qq-listenport" value="18777" min="1024" max="65535" style="width:140px;padding:6px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <span style="color:var(--muted);flex-shrink:0;width:110px">白名单 QQ 号</span>
+        <input type="text" id="qq-allowed" placeholder="留空=所有好友（多个用逗号分隔）" spellcheck="false" style="flex:1">
+      </div>
+      <div class="row" style="margin-top:8px">
+        <span style="color:var(--muted);flex-shrink:0;width:110px">命令前缀</span>
+        <input type="text" id="qq-prefix" placeholder="留空=全部消息；如填 !dsh 则只处理以 !dsh 开头的消息" spellcheck="false" style="flex:1">
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="qq-save" class="primary">保存设置</button>
+      </div>
     </div>
   </section>
 
