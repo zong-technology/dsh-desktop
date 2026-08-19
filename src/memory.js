@@ -93,7 +93,7 @@ class MemoryService {
     if (!snap || !snap.text) return { ok: false, error: '暂无对话快照可总结' };
 
     let summary;
-    if (mode === 'llm' && s.deepseekApiKey) {
+    if ((mode === 'llm' || mode === 'import') && s.deepseekApiKey) {
       summary = await this._summarizeWithLLM(snap.text.slice(-60000), s.deepseekApiKey);
       if (!summary) {
         this.log.warn?.('LLM 总结失败，回退到规则总结');
