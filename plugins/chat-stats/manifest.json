@@ -1,0 +1,14 @@
+{
+  "id": "chat-stats",
+  "name": "会话统计",
+  "version": "1.0.0",
+  "kind": "plugin",
+  "description": "统计当前 DSH 会话的消息数、总字数与时长，托盘一键查看。",
+  "author": "DSH Desktop",
+  "main": "main.js",
+  "test": "test.js",
+  "compat": {
+    "os": ["win32", "linux", "darwin"],
+    "electron": ">=28"
+  }
+}
