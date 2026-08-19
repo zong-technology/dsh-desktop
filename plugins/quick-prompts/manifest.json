@@ -1,0 +1,14 @@
+{
+  "id": "quick-prompts",
+  "name": "快捷提示词",
+  "version": "1.0.0",
+  "kind": "plugin",
+  "description": "一键复制常用提示词（翻译 / 总结 / 代码审查 / 日报）到剪贴板，托盘直达。",
+  "author": "DSH Desktop",
+  "main": "main.js",
+  "test": "test.js",
+  "compat": {
+    "os": ["win32", "linux", "darwin"],
+    "electron": ">=28"
+  }
+}
