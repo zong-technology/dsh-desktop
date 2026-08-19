@@ -467,7 +467,25 @@ async function refreshAll() {
   await renderRecommended();
   await renderMemory();
   await renderWallpaper();
+  await renderQQ();
   await renderAbout();
+}
+
+// ---------- QQ 同步 Tab ----------
+
+let qqSettings = null;
+
+async function renderQQ() {
+  qqSettings = await api.invoke('qq:settings:get');
+  const on = !!qqSettings.enabled;
+  const sw = $('#qq-enable');
+  sw.classList.toggle('on', on);
+  sw.title = on ? '点击停用' : '点击启用';
+  $('#qq-enable-label').textContent = on ? '已启用' : '已停用';
+  $('#qq-apiurl').value = qqSettings.apiUrl || 'http://127.0.0.1:3000';
+  $('#qq-listenport').value = qqSettings.listenPort || 18777;
+  $('#qq-allowed').value = qqSettings.allowedUsers || '';
+  $('#qq-prefix').value = qqSettings.prefix || '';
 }
 
 // ---------- 初始化 ----------
@@ -525,6 +543,41 @@ async function init() {
   api.on('nav-to', (t) => {
     if (t && document.querySelector(`nav button[data-tab="${t}"]`)) tab(t);
   });
+
+  // QQ 同步
+  const saveQQ = async () => {
+    const patch = {
+      enabled: !!qqSettings?.enabled,
+      apiUrl: $('#qq-apiurl').value.trim() || 'http://127.0.0.1:3000',
+      listenPort: Math.max(1024, parseInt($('#qq-listenport').value, 10) || 18777),
+      allowedUsers: $('#qq-allowed').value.trim(),
+      prefix: $('#qq-prefix').value.trim(),
+    };
+    qqSettings = await api.invoke('qq:settings:set', patch);
+    renderQQ();
+    toast('QQ 同步设置已保存' + (patch.enabled ? '，桥接已启动' : '，桥接已停止'), 'ok');
+  };
+  $('#qq-enable').onclick = async () => {
+    qqSettings = { ...qqSettings, enabled: !qqSettings?.enabled };
+    await saveQQ();
+  };
+  $('#qq-save').onclick = saveQQ;
+  $('#qq-test').onclick = async () => {
+    const box = $('#qq-test-result');
+    box.className = 'result';
+    box.textContent = '⏳ 正在测试 NapCat 连接…';
+    const r = await api.invoke('qq:test');
+    if (r.ok) {
+      box.className = 'result ok';
+      box.textContent = `✅ NapCat 已连接：${r.nick}（QQ ${r.userId}）`;
+    } else {
+      box.className = 'result err';
+      box.textContent = `❌ 连接失败：${r.error || '未知错误'}`;
+    }
+  };
+
+  await refreshAll();
+}
   api.on('plugin:install-progress', (p) => {
     if (!p || !p.stage) return;
     // 更新步骤状态
