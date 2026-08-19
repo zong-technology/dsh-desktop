@@ -53,6 +53,7 @@ let registry = null;
 let appSettings = null;
 let activePlugins = new Map(); // id -> { mod, deactivate }
 let wpCssKeys = []; // 已注入的壁纸透明化 CSS key（guest 页面内）
+let wpTextMode = 'dark'; // 当前 DSH 文字颜色模式：'dark'=深色文字(亮壁纸) | 'light'=浅色文字(暗壁纸)
 
 function userDataFile(name) {
   return path.join(app.getPath('userData'), name);
@@ -70,8 +71,9 @@ function loadAppSettings() {
   appSettings.plugins = appSettings.plugins || {};
   // 清理历史遗留的 "undefined" 开关
   if (appSettings.plugins['undefined']) delete appSettings.plugins['undefined'];
-  appSettings.wallpaper = appSettings.wallpaper || { type: 'off', source: '', enabled: false, mode: 'window' };
+  appSettings.wallpaper = appSettings.wallpaper || { type: 'off', source: '', enabled: false, mode: 'window', opacity: 55 };
   if (!appSettings.wallpaper.mode) appSettings.wallpaper.mode = 'window';
+  if (appSettings.wallpaper.opacity === undefined) appSettings.wallpaper.opacity = 55;
   return appSettings;
 }
 
@@ -204,34 +206,50 @@ function maybeInjectWatcher() {
  *  关闭时还原记录的原始背景色。会话框（webview）始终保留。
  */
 /**
- * 会话背景壁纸：让 DSH 会话界面透出壁纸（聊天软件背景效果）。
+ * 会话背景壁纸：让整个 DSH 会话界面（含聊天框）透出壁纸（聊天软件背景效果）。
  * 采用 insertCSS（CSS 引擎注入，不执行 JS——DSH 页面执行复杂 JS 脚本会失败）：
- *  1. 结构透明：html/body/body>div/#root 及其直接子层背景透明
- *  2. token 重映射：DSH 官方页面背景 CSS 变量（--dsw-alias-bg-*）→ 透明，
- *     让会话列表/内容区/遮罩等所有页面级背景透出壁纸；控件类 token
- *     （按钮/输入框/边框/文字）不受影响，界面保持可读。
- *  关闭时 removeInsertedCSS 恢复原样。会话框（webview）始终保留。
+ *  1. 全页面透明：html/body 及所有容器背景 → 透明（壁纸贯穿整个会话界面，
+ *     包括聊天框/会话列表/内容区），文字与边框不受影响。
+ *  2. 输入区保留半透明白底，保证输入框边界可见、可读。
+ *  3. 可读性由客户端壁纸层的「暗色遮罩」保证（透明度可调，wallpaper.opacity）。
+ *  关闭时 removeInsertedCSS 恢复 DSH 原本白色界面。
  */
 function wallpaperCss() {
   return `
-    html, body { background: transparent !important; }
-    body > div, #root, #root > div, #root > main, #root > section, #root > aside, #root > nav { background: transparent !important; }
-    * {
-      --dsw-alias-bg-base: transparent !important;
-      --dsw-alias-bg-layer-1: transparent !important;
-      --dsw-alias-bg-layer-2: transparent !important;
-      --dsw-alias-bg-layer-3: transparent !important;
-      --dsw-alias-bg-mask-1: transparent !important;
-      --dsw-alias-bg-mask-2: transparent !important;
-      --dsw-alias-bg-mask-3: transparent !important;
-      --dsw-alias-bg-mask-drop: transparent !important;
-      --dsw-alias-bg-mask-photo: transparent !important;
-      --dsw-alias-bg-module-platform: transparent !important;
-      --dsw-alias-bg-multi-select: transparent !important;
-      --dsw-alias-bg-overlay: transparent !important;
-      --dsw-alias-bg-skeleton: transparent !important;
+    html, body, #root { background: transparent !important; }
+    * { background: transparent !important; }
+    input, textarea, button, [contenteditable="true"], [role="textbox"] {
+      background: rgba(255, 255, 255, 0.14) !important;
     }
   `;
+}
+
+/**
+ * 文字颜色自适应 CSS：根据壁纸平均亮度切换文字颜色（让文字在壁纸上清晰可读）。
+ * 只重映射 DSH 官方 label/brand token（文字色），不强制全局 color（保留代码高亮等）。
+ * mode 'light' = 壁纸偏暗 → 浅色文字；mode 'dark' = 壁纸偏亮 → 深色文字。
+ */
+function wallpaperTextCss(mode) {
+  if (mode === 'light') {
+    return `* {
+      --dsw-alias-label-primary: #f2f4f8 !important;
+      --dsw-alias-label-secondary: #c9cfd9 !important;
+      --dsw-alias-label-tertiary: #9aa3b2 !important;
+      --dsw-alias-label-dimmed: #8f97a6 !important;
+      --dsw-alias-label-caption: #b9c1cc !important;
+      --dsw-alias-label-primary-inverted: #10141c !important;
+      --dsw-alias-brand-text: #f2f4f8 !important;
+    }`;
+  }
+  return `* {
+    --dsw-alias-label-primary: #1b2130 !important;
+    --dsw-alias-label-secondary: #4a5264 !important;
+    --dsw-alias-label-tertiary: #6b7488 !important;
+    --dsw-alias-label-dimmed: #8b93a3 !important;
+    --dsw-alias-label-caption: #55607a !important;
+    --dsw-alias-label-primary-inverted: #f2f4f8 !important;
+    --dsw-alias-brand-text: #1b2130 !important;
+  }`;
 }
 
 function applyGuestWallpaper() {
@@ -246,9 +264,15 @@ function applyGuestWallpaper() {
     w.type !== 'off' &&
     !!w.source;
   if (on) {
-    if (wpCssKeys.length > 0) return; // 已注入
+    if (wpCssKeys.length > 0) return; // 已注入（透明 CSS + 文字 CSS）
+    // 透明 CSS
     guestContents
       .insertCSS(wallpaperCss())
+      .then((key) => wpCssKeys.push(key))
+      .catch(() => {});
+    // 文字颜色自适应 CSS（当前模式）
+    guestContents
+      .insertCSS(wallpaperTextCss(wpTextMode))
       .then((key) => wpCssKeys.push(key))
       .catch(() => {});
   } else {
@@ -257,6 +281,21 @@ function applyGuestWallpaper() {
     wpCssKeys = [];
     Promise.all(keys.map((k) => guestContents.removeInsertedCSS(k).catch(() => {}))).catch(() => {});
   }
+}
+
+/** 根据壁纸亮度切换文字颜色（shell 检测亮度后调用） */
+function setWallpaperTextMode(dark) {
+  const mode = dark ? 'light' : 'dark';
+  if (mode === wpTextMode) return;
+  wpTextMode = mode;
+  if (!guestContents || guestContents.isDestroyed() || wpCssKeys.length === 0) return;
+  // 移除旧文字 CSS（最后一个 key）并注入新模式
+  const oldKey = wpCssKeys.pop();
+  guestContents.removeInsertedCSS(oldKey).catch(() => {});
+  guestContents
+    .insertCSS(wallpaperTextCss(mode))
+    .then((key) => wpCssKeys.push(key))
+    .catch(() => {});
 }
 
 function createSettingsWindow() {
@@ -661,6 +700,11 @@ function registerIpc() {
     return { ok: true };
   });
   ipcMain.handle('wallpaper:settings:get', () => appSettings.wallpaper);
+  ipcMain.handle('wallpaper:brightness', (_e, { dark }) => {
+    // shell 检测壁纸平均亮度 → 切换 DSH 文字颜色（亮壁纸深字/暗壁纸浅字）
+    setWallpaperTextMode(!!dark);
+    return { ok: true };
+  });
   ipcMain.handle('wallpaper:settings:set', async (_e, patch) => {
     Object.assign(appSettings.wallpaper, patch || {});
     saveAppSettings();
