@@ -50,10 +50,11 @@
   }
   .titlebar .win-controls button.wc-close:hover { background: linear-gradient(180deg, #ff453a, #d70015); color: #fff; }
 
-  #content { flex: 1; display: flex; overflow: hidden; }
+  #content { flex: 1; display: flex; overflow: hidden; position: relative; }
 
   /* ===== 左侧功能边栏 ===== */
-  .side { width: 252px; flex-shrink: 0; background: rgba(16,19,26,.97); border-right: 1px solid var(--border); display: flex; flex-direction: column; z-index: 30; }
+  .side { width: 252px; flex-shrink: 0; background: rgba(16,19,26,.66); border-right: 1px solid var(--border); display: flex; flex-direction: column; z-index: 30; position: relative; }
+  .side:hover { background: rgba(16,19,26,.78); }
   .brand { display: flex; align-items: center; gap: 8px; padding: 14px 14px 10px; }
   .brand img { width: 22px; height: 22px; border-radius: 5px; }
   .brand .name { font-weight: 700; font-size: 13.5px; }
@@ -91,16 +92,18 @@
   .foot a:hover { color: var(--accent); }
   .foot .quit { color: var(--red); }
 
-  /* ===== 右侧舞台：壁纸背景层 + DSH 内容 ===== */
-  .stage { flex: 1; position: relative; overflow: hidden; background: linear-gradient(160deg, #141926, #0c0f15); }
-  .stage .bg { position: absolute; inset: 0; z-index: 1; }
-  .stage .bg video { width: 100%; height: 100%; object-fit: cover; }
-  .stage .bg iframe { width: 100%; height: 100%; border: none; }
-  .stage .bg img { width: 100%; height: 100%; object-fit: cover; }
+  /* ===== 壁纸背景层：覆盖整个内容区（左侧边栏 + 右侧舞台）===== */
+  #bg { position: absolute; inset: 0; z-index: 1; overflow: hidden; }
+  #bg video { width: 100%; height: 100%; object-fit: cover; }
+  #bg iframe { width: 100%; height: 100%; border: none; }
+  #bg img { width: 100%; height: 100%; object-fit: cover; }
   #wp-media-box { width: 100%; height: 100%; }
   #wp-media-box video, #wp-media-box img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .stage .bg.off { background: linear-gradient(160deg, #141926, #0c0f15); }
-  .stage .bg .shade { position: absolute; inset: 0; background: rgba(10,12,18,.45); }
+  #bg.off { background: linear-gradient(160deg, #141926, #0c0f15); }
+  #bg .shade { position: absolute; inset: 0; background: rgba(10,12,18,.45); }
+
+  /* ===== 右侧舞台：DSH 内容（透明，透出背后壁纸）===== */
+  .stage { flex: 1; position: relative; overflow: hidden; background: transparent; z-index: 2; }
 
   webview#dsh { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; display: flex; }
   webview#dsh.hidden { display: none; }
@@ -136,6 +139,10 @@
   </div>
 
   <div id="content">
+  <!-- 壁纸背景层：覆盖整个内容区（左侧边栏 + 右侧舞台） -->
+  <div class="bg off" id="bg">
+    <div class="shade"></div>
+  </div>
   <!-- 左侧功能边栏 -->
   <aside class="side">
     <div class="brand">
@@ -164,9 +171,9 @@
       <div class="row"><span class="lbl"><span class="ic">🧠</span>上下文记忆</span><button class="switch" id="sw-memory"></button></div>
       <div class="row"><span class="lbl"><span class="ic">🎨</span>客户端壁纸</span><button class="switch" id="sw-wallpaper"></button></div>
       <div class="row" id="wp-opacity-row">
-        <span class="lbl" style="width:auto"><span class="ic">🔆</span>背景透明度</span>
-        <input type="range" id="wp-opacity" min="0" max="90" step="5" value="55" style="flex:1;min-width:0">
-        <span class="lbl" id="wp-opacity-val" style="width:34px;text-align:right">55</span>
+        <span class="lbl" style="width:auto"><span class="ic">🔆</span>壁纸透明度</span>
+        <input type="range" id="wp-opacity" min="0" max="100" step="5" value="100" style="flex:1;min-width:0">
+        <span class="lbl" id="wp-opacity-val" style="width:34px;text-align:right">100</span>
       </div>
       <button class="btn" id="btn-settings">⚙️ 打开完整设置窗口</button>
     </div>
@@ -176,11 +183,8 @@
     </div>
   </aside>
 
-  <!-- 右侧舞台：壁纸背景 + DSH -->
+  <!-- 右侧舞台：DSH 内容 -->
   <div class="stage">
-    <div class="bg off" id="bg">
-      <div class="shade"></div>
-    </div>
     <webview id="dsh" src="about:blank" preload="preload-main.js" webpreferences="contextIsolation=yes, sandbox=yes"></webview>
 
     <div class="offline-card" id="offline">
