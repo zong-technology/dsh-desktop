@@ -49,8 +49,29 @@
   <!-- ============ 推荐 ============ -->
   <section id="tab-recommended" class="tab">
     <div class="card">
-      <h3>🛒 插件市场 <span id="rec-source" class="badge">本地</span></h3>
-      <p class="hint">内置的插件/Skill 直接开关即可；仓库型插件需要先安装（同样经过兼容性检查与测试）。</p>
+      <h3>🛒 插件市场 <span id="rec-source" class="badge">本地</span> <span id="rec-count" class="badge blue"></span></h3>
+      <p class="hint">内置的插件/Skill 直接开关即可；仓库型插件需要先安装（同样经过兼容性检查与测试）。市场数据来自 <b>GitHub 官方生态仓库（dsh-web-ui）</b> 与本地注册表。</p>
+      <div class="rec-filters">
+        <input type="text" id="rec-search" placeholder="🔍 搜索插件 / 技能 / 关键词…" spellcheck="false">
+        <div class="chip-row" id="rec-filter-kind">
+          <button class="chip on" data-v="all">全部</button>
+          <button class="chip" data-v="plugin">插件</button>
+          <button class="chip" data-v="dsh-plugin">DSH 插件</button>
+          <button class="chip" data-v="skill">Skill</button>
+          <button class="chip" data-v="builtin">内置</button>
+        </div>
+        <div class="chip-row" id="rec-filter-src">
+          <button class="chip on" data-v="all">全部来源</button>
+          <button class="chip" data-v="github-market">GitHub 市场</button>
+          <button class="chip" data-v="github">官方仓库</button>
+          <button class="chip" data-v="local">本地/内置</button>
+        </div>
+        <div class="chip-row" id="rec-filter-state">
+          <button class="chip on" data-v="all">全部状态</button>
+          <button class="chip" data-v="installed">已安装</button>
+          <button class="chip" data-v="notinstalled">未安装</button>
+        </div>
+      </div>
       <div id="rec-list"></div>
     </div>
   </section>
@@ -132,9 +153,9 @@
         <input type="number" id="wp-interval" min="5" max="3600" value="60" style="width:90px;padding:6px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text)">
       </div>
       <div class="row" style="margin-top:10px">
-        <span style="color:var(--muted);flex-shrink:0">背景透明度（遮罩深浅，文字更清晰）</span>
-        <input type="range" id="wp-opacity" min="0" max="90" step="5" value="55" style="flex:1">
-        <span id="wp-opacity-val" style="width:38px;text-align:right;color:var(--text)">55</span>
+        <span style="color:var(--muted);flex-shrink:0">壁纸透明度（越低壁纸越淡）</span>
+        <input type="range" id="wp-opacity" min="0" max="100" step="5" value="100" style="flex:1">
+        <span id="wp-opacity-val" style="width:38px;text-align:right;color:var(--text)">100</span>
       </div>
       <div id="wp-state" class="metric"></div>
     </div>
