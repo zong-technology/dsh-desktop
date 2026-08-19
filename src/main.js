@@ -707,6 +707,29 @@ app.whenReady().then(async () => {
         app.exit(0);
       }, 3000);
     }
+    if (process.env.DSH_DESKTOP_WP_DEBUG === '1') {
+      // 壁纸调试：打印 guest body 背景 + shell 壁纸视频状态（用真实用户设置）
+      setTimeout(async () => {
+        try {
+          const gb = guestContents && !guestContents.isDestroyed()
+            ? await guestContents.executeJavaScript(`getComputedStyle(document.body).backgroundColor`, true).catch((e) => 'ERR:' + e.message)
+            : 'NO_GUEST';
+          const shell = mainWindow && !mainWindow.isDestroyed()
+            ? await mainWindow.webContents.executeJavaScript(`(() => {
+                const bg = document.getElementById('bg');
+                const v = document.querySelector('#bg video');
+                return { bgClass: bg ? bg.className : null, hasVideo: !!v, src: v ? v.src : null, vErr: v && v.error ? v.error.code : null, badge: document.getElementById('wp-badge') ? document.getElementById('wp-badge').className : null };
+              })()`, true).catch((e) => 'ERR:' + e.message)
+            : 'NO_WIN';
+          console.log(`[wp-debug] guestBodyBg=${gb}`);
+          console.log(`[wp-debug] shell=${JSON.stringify(shell)}`);
+          console.log(`[wp-debug] settings=${JSON.stringify(appSettings.wallpaper)}`);
+        } catch (e) {
+          console.log('[wp-debug] 异常:', e.message);
+        }
+        app.exit(0);
+      }, 10000);
+    }
   } catch (e) {
     console.error('[main] 启动失败:', e);
     app.exit(1);
