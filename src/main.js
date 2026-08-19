@@ -73,8 +73,8 @@ function loadAppSettings() {
   if (appSettings.plugins['undefined']) delete appSettings.plugins['undefined'];
   appSettings.wallpaper = appSettings.wallpaper || { type: 'off', source: '', enabled: false, mode: 'window', opacity: 100 };
   if (!appSettings.wallpaper.mode) appSettings.wallpaper.mode = 'window';
-  // 旧版 opacity 语义是"遮罩深浅"(55)，新版是"壁纸不透明度"(100) → 迁移旧值
-  if (appSettings.wallpaper.opacity === undefined || appSettings.wallpaper.opacity < 100) {
+  // opacity = 壁纸不透明度(0-100)，默认 100；旧版语义(遮罩深浅55)直接视为新语义值，用户可自行调整
+  if (appSettings.wallpaper.opacity === undefined) {
     appSettings.wallpaper.opacity = 100;
   }
   return appSettings;
@@ -552,16 +552,25 @@ function registerIpc() {
 
   ipcMain.handle('registry:recommended', async () => {
     const r = await registry.getRecommended();
-    // 合并 GitHub 仓库市场（dsh-web-ui 官方生态）条目
+    // 合并 GitHub 仓库市场（dsh-web-ui 官方生态包）
     try {
       const market = await registry.fetchGithubMarket();
       if (market.length) {
         const ids = new Set((r.items || []).map((i) => i.id));
         r.items = [...(r.items || []), ...market.filter((m) => !ids.has(m.id))];
       }
-      r.marketSource = 'github-market';
     } catch (e) {
       // 市场拉取失败不影响本地
+    }
+    // 合并 GitHub 热门插件搜索（全部适配 DSH 的仓库，按 star 排序）
+    try {
+      const found = await registry.searchGithubPlugins();
+      if (found.length) {
+        const ids = new Set((r.items || []).map((i) => i.id));
+        r.items = [...(r.items || []), ...found.filter((m) => !ids.has(m.id))];
+      }
+    } catch (e) {
+      // 搜索失败不影响本地
     }
     // 解析本地/仓库安装源为可安装 spec
     for (const item of r.items || []) {
