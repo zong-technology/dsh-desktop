@@ -59,11 +59,16 @@ function userDataFile(name) {
 
 function loadAppSettings() {
   try {
-    appSettings = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(userDataFile('settings.json'), 'utf8')) };
+    const parsed = JSON.parse(fs.readFileSync(userDataFile('settings.json'), 'utf8'));
+    // 旧版占位符 registryUrl（dsh-desktop/dsh-desktop）→ 用新默认
+    if (parsed.registryUrl && /\/dsh-desktop\/dsh-desktop\//.test(parsed.registryUrl)) delete parsed.registryUrl;
+    appSettings = { ...DEFAULTS, ...parsed };
   } catch {
     appSettings = { ...DEFAULTS };
   }
   appSettings.plugins = appSettings.plugins || {};
+  // 清理历史遗留的 "undefined" 开关
+  if (appSettings.plugins['undefined']) delete appSettings.plugins['undefined'];
   appSettings.wallpaper = appSettings.wallpaper || { type: 'off', source: '', enabled: false, mode: 'window' };
   if (!appSettings.wallpaper.mode) appSettings.wallpaper.mode = 'window';
   return appSettings;
@@ -189,9 +194,11 @@ function maybeInjectWatcher() {
 }
 
 /**
- * 会话背景壁纸：把 DSH 页面的 <body> 背景改为透明，
- * 让客户端壁纸层从会话内容之后透出（聊天软件背景效果）。
- * 关闭时恢复白色背景。会话框（webview）始终保留。
+ * 会话背景壁纸：让 DSH 会话界面透出壁纸（聊天软件背景效果）。
+ * 做法（规避页面 CSP 对内联 <style> 的限制）：
+ *  用 inline style（setProperty + important）把 html/body 背景改为透明，
+ *  页面透明处直接透出 webview 元素（默认透明背景）之后的壁纸层；
+ *  关闭时还原记录的原始背景色。会话框（webview）始终保留。
  */
 function applyGuestWallpaper() {
   if (!guestContents || guestContents.isDestroyed()) return;
@@ -204,16 +211,28 @@ function applyGuestWallpaper() {
     w.mode !== 'desktop' &&
     w.type !== 'off' &&
     !!w.source;
-  const css = on
-    ? 'html,body{background:transparent !important;}'
-    : 'html,body{background:rgb(255,255,255) !important;}';
   guestContents
     .executeJavaScript(
       `(function(){
         try {
-          var t = document.getElementById('__dshdesktop_wp_css');
-          if (!t) { t = document.createElement('style'); t.id = '__dshdesktop_wp_css'; document.head.appendChild(t); }
-          t.textContent = ${JSON.stringify(css)};
+          var on = ${on ? 'true' : 'false'};
+          var d = document;
+          if (!d.__dshwp_orig) d.__dshwp_orig = {};
+          ['html','body'].forEach(function(sel){
+            var el = d.querySelector(sel);
+            if (!el) return;
+            if (d.__dshwp_orig[sel] === undefined) {
+              var o = getComputedStyle(el).backgroundColor;
+              d.__dshwp_orig[sel] = (o && o !== 'rgba(0, 0, 0, 0)' && o !== 'transparent') ? o : null;
+            }
+            if (on) {
+              el.style.setProperty('background', 'transparent', 'important');
+            } else {
+              var orig = d.__dshwp_orig[sel];
+              if (orig) el.style.setProperty('background', orig, 'important');
+              else el.style.removeProperty('background');
+            }
+          });
           return true;
         } catch(e) { return false; }
       })()`,
@@ -311,6 +330,12 @@ function buildPluginCtx() {
     log: console,
     appVersion: app.getVersion(),
     registerIpc: (channel, handler) => ipcMain.handle(channel, handler),
+    notify: (msg) => {
+      try {
+        const { Notification } = require('electron');
+        new Notification({ title: 'DSH Desktop', body: String(msg) }).show();
+      } catch (e) { /* ignore */ }
+    },
     addTrayItem: (label, clickFn) => {
       // 延长生命周期：存到 map 里由 rebuildTray 读取
       const key = `dyn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -455,7 +480,9 @@ function registerIpc() {
     return r;
   });
   ipcMain.handle('plugins:toggle', async (_e, id, enabled) => {
-    const r = await pluginManager.toggle(String(id), !!enabled);
+    id = String(id || '').trim();
+    if (!id || id === 'undefined') return { ok: false, error: '缺少插件 ID' };
+    const r = await pluginManager.toggle(id, !!enabled);
     if (r.ok) {
       if (id === 'wallpaper-plugin') await applyWallpaperPlugin();
       if (id === 'memory-plugin') maybeInjectWatcher();
@@ -506,6 +533,35 @@ function registerIpc() {
     });
   });
   ipcMain.handle('memory:summary', async (_e, mode) => memoryService.summarizeNow(mode === 'llm' ? 'llm' : 'manual'));
+  ipcMain.handle('memory:import-from-page', async () => {
+    // 把 DSH 页面当前会话文本导入记忆并立即生成交接摘要（可覆盖浏览器/历史会话）
+    if (!guestContents || guestContents.isDestroyed() || !guestContents.getURL().startsWith('http')) {
+      return { ok: false, error: 'DSH 页面未加载，无法导入' };
+    }
+    const data = await guestContents
+      .executeJavaScript(
+        `(function(){
+          try {
+            var t = document.body ? document.body.innerText : '';
+            return { text: t.slice(-400000), title: document.title || '', url: location.href || '' };
+          } catch(e) { return null; }
+        })()`,
+        true
+      )
+      .catch(() => null);
+    if (!data || !data.text || data.text.trim().length < 50) {
+      return { ok: false, error: '未能提取会话文本（请先在 DSH 中打开一个历史会话）' };
+    }
+    try {
+      const f = path.join(userDataFile('memory'), `import-${Date.now()}.json`);
+      fs.mkdirSync(path.dirname(f), { recursive: true });
+      fs.writeFileSync(f, JSON.stringify({ ts: Date.now(), title: data.title, url: data.url, text: data.text, manual: true }, null, 2), 'utf8');
+    } catch { /* 快照写入失败不阻塞总结 */ }
+    await memoryService.report({ text: data.text, title: data.title, url: data.url, ts: Date.now() });
+    const r = await memoryService.summarizeNow('import');
+    if (!r.ok) return { ok: false, error: '总结失败' };
+    return { ok: true, chars: data.text.length, title: data.title, handoff: r.handoff };
+  });
   ipcMain.handle('memory:handoff', () => memoryService.getHandoff());
   ipcMain.handle('memory:conversations', () => memoryService.listConversations());
   ipcMain.handle('memory:inject-handoff', async () => {
