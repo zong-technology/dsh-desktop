@@ -15,7 +15,7 @@
   </div>
   <nav>
     <button data-tab="plugins" class="active">🧩 插件</button>
-    <button data-tab="recommended">⭐ 推荐</button>
+    <button data-tab="recommended">🛒 插件市场</button>
     <button data-tab="memory">🧠 记忆</button>
     <button data-tab="wallpaper">🎨 壁纸</button>
     <button data-tab="about">ℹ️ 关于</button>
@@ -49,7 +49,7 @@
   <!-- ============ 推荐 ============ -->
   <section id="tab-recommended" class="tab">
     <div class="card">
-      <h3>⭐ 推荐插件与 Skill <span id="rec-source" class="badge">本地</span></h3>
+      <h3>🛒 插件市场 <span id="rec-source" class="badge">本地</span></h3>
       <p class="hint">内置的插件/Skill 直接开关即可；仓库型插件需要先安装（同样经过兼容性检查与测试）。</p>
       <div id="rec-list"></div>
     </div>
@@ -86,9 +86,14 @@
       <div style="display:flex;gap:10px;margin-top:12px">
         <button id="btn-summarize" class="primary">立即总结（规则）</button>
         <button id="btn-summarize-llm">用 LLM 总结</button>
+        <button id="btn-import-session" title="把 DSH 页面当前会话（含历史会话）文本导入记忆并立即总结">📥 导入当前会话</button>
         <button id="btn-copy-handoff">复制交接摘要</button>
         <button id="btn-inject-handoff">注入到 DSH 对话框</button>
       </div>
+      <p class="hint" style="margin-top:8px">
+        💡 想总结<b>之前（含浏览器）的历史会话</b>：先在 DSH 页面打开该历史会话，再点「📥 导入当前会话」，
+        文本会写入记忆并立即生成交接摘要（配置了 DeepSeek Key 则用 LLM 总结）。
+      </p>
       <div class="metric" id="mem-metric"></div>
       <div class="handoff-preview" id="handoff-preview">（暂无交接摘要）</div>
       <h3 style="margin-top:14px">历史交接 <span id="conv-count" class="badge">0</span></h3>
