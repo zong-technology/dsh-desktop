@@ -62,6 +62,12 @@ function updateMaxIcon(maximized) {
 let wpRotateTimer = null;
 let wpFiles = [];
 
+/** Windows 本地路径 → file:// URL（video/img 的 src 需要 URL，不能直接塞路径） */
+function toFileUrl(p) {
+  if (/^https?:|^file:|^data:/i.test(String(p))) return String(p);
+  return 'file:///' + encodeURI(String(p).replace(/\\/g, '/')).replace(/#/g, '%23');
+}
+
 async function renderWallpaper() {
   const bg = $('#bg');
   bg.innerHTML = '';
@@ -86,7 +92,7 @@ async function renderWallpaper() {
 
   if (wpState.type === 'video') {
     const v = document.createElement('video');
-    v.src = wpState.source;
+    v.src = toFileUrl(wpState.source);
     v.autoplay = true;
     v.muted = true;
     v.loop = true;
@@ -114,11 +120,11 @@ async function renderWallpaper() {
       box.innerHTML = '';
       if (/\.(jpg|jpeg|png|webp|bmp)([?#]|$)/i.test(u)) {
         const img = document.createElement('img');
-        img.src = u;
+        img.src = toFileUrl(u);
         box.appendChild(img);
       } else {
         const v = document.createElement('video');
-        v.src = u;
+        v.src = toFileUrl(u);
         v.autoplay = true;
         v.muted = true;
         v.loop = true;
