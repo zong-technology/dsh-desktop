@@ -86,6 +86,7 @@ async function renderWallpaper() {
     const shade = document.createElement('div');
     shade.className = 'shade';
     bg.appendChild(shade);
+    stopBrightnessSampling();
     return;
   }
   bg.className = 'bg on';
@@ -141,12 +142,52 @@ async function renderWallpaper() {
   }
   const shade = document.createElement('div');
   shade.className = 'shade';
+  const opacity = Math.max(0, Math.min(90, Number(wpState?.opacity ?? 55)));
+  shade.style.opacity = String(opacity / 100);
+  if (opacity < 8) shade.style.background = 'rgba(10,12,18,0)'; // 接近透明遮罩
   bg.appendChild(shade);
+  startBrightnessSampling();
+}
+
+let wpBrightTimer = null;
+
+/** 周期采样壁纸平均亮度 → 通知主进程切换 DSH 文字颜色（亮壁纸深字/暗壁纸浅字） */
+function startBrightnessSampling() {
+  if (wpBrightTimer) return;
+  const sample = () => {
+    const media = document.querySelector('#bg video, #bg img, #wp-media-box video, #wp-media-box img');
+    if (!media || media.readyState < 2) return;
+    try {
+      const c = document.createElement('canvas');
+      c.width = 48;
+      c.height = 27;
+      const ctx = c.getContext('2d');
+      if (!ctx) return;
+      ctx.drawImage(media, 0, 0, 48, 27);
+      const d = ctx.getImageData(0, 0, 48, 27).data;
+      let sum = 0;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 16) {
+        sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
+        n++;
+      }
+      if (!n) return;
+      api.invoke('wallpaper:brightness', { dark: sum / n < 128 });
+    } catch (e) {}
+  };
+  sample();
+  wpBrightTimer = setInterval(sample, 3000);
+}
+
+function stopBrightnessSampling() {
+  if (wpBrightTimer) {
+    clearInterval(wpBrightTimer);
+    wpBrightTimer = null;
+  }
 }
 
 /** 预览/确认壁纸背景：会话框始终保留，壁纸作为会话背景直接可见 */
-function previewWallpaper() {
-  if (!wpState || !wpState.active) {
+function previewWallpaper() {  if (!wpState || !wpState.active) {
     toast('壁纸未开启，请先在 壁纸 页设置来源', 'err');
     return;
   }
@@ -195,6 +236,15 @@ async function init() {
     await refreshWallpaperState();
   };
 
+  // 背景透明度调节
+  const wpOpacity = $('#wp-opacity');
+  const wpOpacityVal = $('#wp-opacity-val');
+  wpOpacity.oninput = async () => {
+    const v = Number(wpOpacity.value);
+    wpOpacityVal.textContent = String(v);
+    await api.invoke('wallpaper:settings:set', { opacity: v });
+  };
+
   $('#btn-settings').onclick = () => api.invoke('settings:open', null);
   $('#lnk-github').onclick = () => api.invoke('app:open-external', 'https://github.com/zong-technology/dsh-desktop');
   $('#lnk-quit').onclick = () => api.invoke('app:quit');
@@ -229,7 +279,14 @@ async function init() {
 
 async function refreshWallpaperState() {
   const s = await api.invoke('wallpaper:state').catch(() => null);
-  if (s) wpState = { ...s.settings, active: s.active };
+  if (s) {
+    wpState = { ...s.settings, active: s.active };
+    const op = Math.max(0, Math.min(90, Number(s.settings.opacity ?? 55)));
+    const el = $('#wp-opacity');
+    const val = $('#wp-opacity-val');
+    if (el) el.value = String(op);
+    if (val) val.textContent = String(op);
+  }
 }
 
 init();
