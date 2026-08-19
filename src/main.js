@@ -71,9 +71,12 @@ function loadAppSettings() {
   appSettings.plugins = appSettings.plugins || {};
   // 清理历史遗留的 "undefined" 开关
   if (appSettings.plugins['undefined']) delete appSettings.plugins['undefined'];
-  appSettings.wallpaper = appSettings.wallpaper || { type: 'off', source: '', enabled: false, mode: 'window', opacity: 55 };
+  appSettings.wallpaper = appSettings.wallpaper || { type: 'off', source: '', enabled: false, mode: 'window', opacity: 100 };
   if (!appSettings.wallpaper.mode) appSettings.wallpaper.mode = 'window';
-  if (appSettings.wallpaper.opacity === undefined) appSettings.wallpaper.opacity = 55;
+  // 旧版 opacity 语义是"遮罩深浅"(55)，新版是"壁纸不透明度"(100) → 迁移旧值
+  if (appSettings.wallpaper.opacity === undefined || appSettings.wallpaper.opacity < 100) {
+    appSettings.wallpaper.opacity = 100;
+  }
   return appSettings;
 }
 
@@ -549,6 +552,17 @@ function registerIpc() {
 
   ipcMain.handle('registry:recommended', async () => {
     const r = await registry.getRecommended();
+    // 合并 GitHub 仓库市场（dsh-web-ui 官方生态）条目
+    try {
+      const market = await registry.fetchGithubMarket();
+      if (market.length) {
+        const ids = new Set((r.items || []).map((i) => i.id));
+        r.items = [...(r.items || []), ...market.filter((m) => !ids.has(m.id))];
+      }
+      r.marketSource = 'github-market';
+    } catch (e) {
+      // 市场拉取失败不影响本地
+    }
     // 解析本地/仓库安装源为可安装 spec
     for (const item of r.items || []) {
       if (item.source?.local) {
