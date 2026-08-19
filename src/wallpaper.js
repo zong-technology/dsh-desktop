@@ -71,6 +71,42 @@ class WallpaperEngine {
     return { ok: true };
   }
 
+  /**
+   * 目录壁纸：从目录中自动轮换（视频 + 图片），interval 秒切换一次。
+   * @param {{videos:string[], images:string[]}} scan 文件 URL 列表
+   */
+  async startDir(scan, interval = 60) {
+    if (!this.supported) throw new Error('动态壁纸仅支持 Windows');
+    const files = [...(scan.images || []), ...(scan.videos || [])];
+    if (!files.length) throw new Error('目录中没有壁纸文件');
+    const page = 'file:///' + path.join(this.uiDir, 'wallpaper.html').replace(/\\/g, '/');
+    await this._start(`${page}?kind=dir`);
+    this._stopRotate();
+    let i = 0;
+    const secs = Math.max(5, Number(interval) || 60);
+    this._setSrc(files[0]);
+    this._rotateTimer = setInterval(() => {
+      i = (i + 1) % files.length;
+      this._setSrc(files[i]);
+    }, secs * 1000);
+    return { ok: true, count: files.length, interval: secs };
+  }
+
+  _setSrc(url) {
+    if (this.win && !this.win.isDestroyed()) {
+      this.win.webContents
+        .executeJavaScript(`window.setWallpaperSrc && window.setWallpaperSrc(${JSON.stringify(url)}); true`)
+        .catch(() => {});
+    }
+  }
+
+  _stopRotate() {
+    if (this._rotateTimer) {
+      clearInterval(this._rotateTimer);
+      this._rotateTimer = null;
+    }
+  }
+
   async _start(url) {
     if (!this.win) this._createWin();
     this.win.webContents.once('did-finish-load', () => this._attach());
@@ -109,6 +145,7 @@ class WallpaperEngine {
   }
 
   async stop() {
+    this._stopRotate();
     if (this.win) {
       try {
         this.win.destroy();

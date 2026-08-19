@@ -251,32 +251,41 @@ async function refreshHandoff() {
 
 async function renderWallpaper() {
   const st = await api.invoke('wallpaper:state');
-  const radio = document.querySelector(`input[name="wp-type"][value="${st.settings.type || 'off'}"]`);
-  if (radio) radio.checked = true;
+  const radioType = document.querySelector(`input[name="wp-type"][value="${st.settings.type || 'off'}"]`);
+  if (radioType) radioType.checked = true;
+  const radioMode = document.querySelector(`input[name="wp-mode"][value="${st.settings.mode || 'window'}"]`);
+  if (radioMode) radioMode.checked = true;
   $('#wp-source').value = st.settings.source || '';
+  $('#wp-interval').value = st.settings.interval || 60;
 
   const updateState = (st2) => {
     $('#wp-state').innerHTML = `
       <div class="m">状态: <b>${st2.active ? '运行中' : '未运行'}</b></div>
+      <div class="m">模式: <b>${st2.settings.mode === 'desktop' ? '系统桌面壁纸' : '客户端背景（推荐）'}</b></div>
       <div class="m">类型: <b>${st2.settings.type || 'off'}</b></div>
-      ${st2.supported ? '' : '<div class="m" style="color:var(--yellow)">非 Windows 环境不支持</div>'}
+      ${st2.supported ? '' : '<div class="m" style="color:var(--yellow)">非 Windows 环境不支持系统桌面模式</div>'}
       ${st2.settings.enabled ? `<div class="m">来源: <b>${esc(st2.settings.source || '')}</b></div>` : ''}`;
   };
   updateState(st);
 
   const apply = async () => {
     const type = document.querySelector('input[name="wp-type"]:checked')?.value || 'off';
+    const mode = document.querySelector('input[name="wp-mode"]:checked')?.value || 'window';
     const source = $('#wp-source').value.trim();
+    const interval = Math.max(5, Number($('#wp-interval').value) || 60);
+    // 先保存模式与间隔
+    await api.invoke('wallpaper:settings:set', { mode, interval });
     if (type === 'off') {
       const r = await api.invoke('wallpaper:stop');
       r.ok ? toast('壁纸已关闭', 'ok') : toast('关闭失败: ' + r.error, 'err');
       await renderWallpaper();
       return;
     }
-    if (!source) { toast('请填写视频路径或网页 URL', 'err'); return; }
-    const r = type === 'video'
-      ? await api.invoke('wallpaper:start-video', source)
-      : await api.invoke('wallpaper:start-web', source);
+    if (!source) { toast('请填写视频路径、网页 URL 或目录路径', 'err'); return; }
+    let r;
+    if (type === 'video') r = await api.invoke('wallpaper:start-video', source);
+    else if (type === 'web') r = await api.invoke('wallpaper:start-web', source);
+    else r = await api.invoke('wallpaper:start-dir', source);
     r.ok ? toast('壁纸已应用', 'ok') : toast('应用失败: ' + r.error, 'err');
     await renderWallpaper();
   };
@@ -285,6 +294,13 @@ async function renderWallpaper() {
   $('#btn-pick-video').onclick = async () => {
     const p = await api.invoke('dialog:pick-video');
     if (p) $('#wp-source').value = p;
+  };
+  $('#btn-pick-dir').onclick = async () => {
+    const p = await api.invoke('dialog:pick-dir');
+    if (p) {
+      $('#wp-source').value = p;
+      document.querySelector('input[name="wp-type"][value="dir"]').checked = true;
+    }
   };
 }
 

@@ -99,20 +99,32 @@
   <!-- ============ 壁纸 ============ -->
   <section id="tab-wallpaper" class="tab">
     <div class="card">
-      <h3>🎨 动态壁纸（Windows）</h3>
+      <h3>🎨 动态壁纸</h3>
       <p class="hint">
-        视频 / 网页壁纸会挂载到桌面图标之下（类似 Wallpaper Engine）。此功能由内置插件
-        <b>wallpaper-plugin</b> 提供——若开关是灰的，请先到「推荐」页启用它。
+        两种模式：
+        <b>① 客户端背景（默认）</b>——壁纸显示在 DSH 客户端窗口内（DSH 内容背后/离线时/预览时可见）；
+        <b>② 系统桌面</b>——挂载到 Windows 桌面图标之下（类似 Wallpaper Engine）。
+        此功能由内置插件 <b>wallpaper-plugin</b> 提供——若开关是灰的，请先到「推荐」页启用它。
       </p>
+      <div class="radio-row">
+        <label><input type="radio" name="wp-mode" value="window"> 客户端背景（推荐）</label>
+        <label><input type="radio" name="wp-mode" value="desktop"> 系统桌面壁纸</label>
+      </div>
       <div class="radio-row">
         <label><input type="radio" name="wp-type" value="off"> 关闭</label>
         <label><input type="radio" name="wp-type" value="video"> 视频壁纸</label>
         <label><input type="radio" name="wp-type" value="web"> 网页壁纸</label>
+        <label><input type="radio" name="wp-type" value="dir"> 目录轮换（视频/图片）</label>
       </div>
       <div class="row">
-        <input type="text" id="wp-source" placeholder="视频文件路径 或 网页 URL（https://…）" spellcheck="false">
+        <input type="text" id="wp-source" placeholder="视频文件路径、网页 URL，或壁纸目录路径" spellcheck="false">
         <button id="btn-pick-video">选择视频…</button>
+        <button id="btn-pick-dir">选择目录…</button>
         <button id="btn-wp-apply" class="primary">应用</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <span style="color:var(--muted)">轮换间隔（秒，目录模式生效）</span>
+        <input type="number" id="wp-interval" min="5" max="3600" value="60" style="width:90px;padding:6px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text)">
       </div>
       <div id="wp-state" class="metric"></div>
     </div>

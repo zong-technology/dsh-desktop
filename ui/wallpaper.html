@@ -2,23 +2,42 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src *; media-src *; style-src 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src *; media-src *; img-src *; style-src 'unsafe-inline'">
 <title>DSH Desktop · Wallpaper</title>
 <style>
   html, body { margin:0; padding:0; background:#000; overflow:hidden; width:100%; height:100%; }
-  video { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; pointer-events:none; background:#000; }
+  video, img { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; pointer-events:none; background:#000; }
 </style>
 </head>
 <body>
-<video id="v" autoplay muted loop playsinline></video>
+<video id="v" autoplay muted loop playsinline style="display:none"></video>
+<img id="i" alt="" style="display:none">
 <script>
   const p = new URLSearchParams(location.search);
   const kind = p.get('kind');
   const src = p.get('src');
-  const v = document.getElementById('v');
-  if (kind === 'video' && src) {
-    v.src = src;
-    v.play().catch(() => {});
+  const el = document.getElementById('v');
+  const img = document.getElementById('i');
+  function showVideo(u) {
+    img.style.display = 'none';
+    el.style.display = 'block';
+    el.src = u;
+    el.play().catch(() => {});
+  }
+  function showImage(u) {
+    el.style.display = 'none';
+    img.style.display = 'block';
+    img.src = u;
+  }
+  // 目录轮换时由主进程调用
+  window.setWallpaperSrc = function (u) {
+    if (/\.(jpg|jpeg|png|webp|bmp)([?#]|$)/i.test(u)) showImage(u);
+    else showVideo(u);
+  };
+  if (kind === 'dir') {
+    // 等待主进程推入第一个文件
+  } else if (kind === 'video' && src) {
+    showVideo(src);
   }
 </script>
 </body>

@@ -43,8 +43,7 @@ const DEFAULTS = {
 
 let mainWindow = null;
 let settingsWindow = null;
-let sidebarView = null;   // 左侧功能边栏
-let dshView = null;       // DSH Web GUI 视图
+let guestContents = null;   // 内嵌 DSH webview 的 webContents
 let dshConnected = false;
 let tray = null;
 let pluginManager = null;
@@ -65,7 +64,8 @@ function loadAppSettings() {
     appSettings = { ...DEFAULTS };
   }
   appSettings.plugins = appSettings.plugins || {};
-  appSettings.wallpaper = appSettings.wallpaper || { type: 'off', source: '', enabled: false };
+  appSettings.wallpaper = appSettings.wallpaper || { type: 'off', source: '', enabled: false, mode: 'window' };
+  if (!appSettings.wallpaper.mode) appSettings.wallpaper.mode = 'window';
   return appSettings;
 }
 
@@ -81,78 +81,52 @@ function pluginEnabled(id) {
 
 // ================= 窗口 =================
 
-const SIDEBAR_WIDTH = 252;
-
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 1000,
     minHeight: 620,
-    title: 'DSH Desktop',
     icon: path.join(UI_DIR, 'assets', 'icon.png'),
     backgroundColor: '#0f1115',
     show: false,
-  });
-  mainWindow.once('ready-to-show', () => mainWindow.show());
-  mainWindow.on('resize', layoutViews);
-
-  // —— 左侧功能边栏 ——
-  sidebarView = new WebContentsView({
+    frame: false, // 无边框：自定义标题栏（边框跟随壁纸主题 + 彩色控制按钮）
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      webviewTag: true,
       preload: path.join(SRC_DIR, 'preload.js'),
     },
   });
-  // —— DSH GUI 视图 ——
-  dshView = new WebContentsView({
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      preload: path.join(SRC_DIR, 'preload-main.js'),
-    },
-  });
+  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.webContents.on('did-finish-load', () => pushDshStatus());
+  mainWindow.on('maximize', () => pushWinState());
+  mainWindow.on('unmaximize', () => pushWinState());
 
-  mainWindow.contentView.addChildView(sidebarView);
-  mainWindow.contentView.addChildView(dshView);
-
-  sidebarView.webContents.loadFile(path.join(UI_DIR, 'sidebar.html'));
-  sidebarView.webContents.on('did-finish-load', () => {
-    pushDshStatus();
-  });
-
-  dshView.webContents.on('did-finish-load', () => {
-    const url = dshView.webContents.getURL();
-    if (url.startsWith('http')) setDshStatus(true);
-    maybeInjectWatcher();
-  });
-  dshView.webContents.on('did-navigate', () => {
-    const url = dshView.webContents.getURL();
-    if (url.startsWith('http')) setDshStatus(true);
-    maybeInjectWatcher();
-  });
-  dshView.webContents.on('did-fail-load', (_e, code, desc, validatedURL, isMainFrame) => {
-    if (isMainFrame) {
-      setDshStatus(false);
-      if (validatedURL.startsWith('http')) {
-        dshView.webContents.loadFile(path.join(UI_DIR, 'offline.html'), { query: { url: appSettings.dshUrl } });
-      }
+  // —— 内嵌 DSH 视图（webview guest）——
+  mainWindow.webContents.on('did-attach-webview', (_e, guest) => {
+    guestContents = guest;
+    guest.on('did-finish-load', () => {
+      const url = guest.getURL();
+      if (url.startsWith('http')) setDshStatus(true);
+      maybeInjectWatcher();
+    });
+    guest.on('did-navigate', () => {
+      const url = guest.getURL();
+      if (url.startsWith('http')) setDshStatus(true);
+      maybeInjectWatcher();
+    });
+    guest.on('did-fail-load', (_ev, code, desc, validatedURL, isMainFrame) => {
+      if (isMainFrame) setDshStatus(false);
+    });
+    // 首次加载 DSH
+    if (!guest.getURL()) {
+      loadDsh();
     }
   });
 
-  layoutViews();
-  loadDsh();
+  mainWindow.webContents.loadFile(path.join(UI_DIR, 'shell.html'));
   return mainWindow;
-}
-
-function layoutViews() {
-  if (!mainWindow || mainWindow.isDestroyed() || !sidebarView || !dshView) return;
-  const [w, h] = mainWindow.getContentSize();
-  sidebarView.setBounds({ x: 0, y: 0, width: SIDEBAR_WIDTH, height: h });
-  dshView.setBounds({ x: SIDEBAR_WIDTH, y: 0, width: Math.max(0, w - SIDEBAR_WIDTH), height: h });
 }
 
 function setDshStatus(connected) {
@@ -162,14 +136,41 @@ function setDshStatus(connected) {
 }
 
 function pushDshStatus() {
-  if (sidebarView && !sidebarView.webContents.isDestroyed()) {
-    sidebarView.webContents.send('dsh:status', { connected: dshConnected, url: appSettings.dshUrl });
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('dsh:status', { connected: dshConnected, url: appSettings.dshUrl });
   }
 }
 
+function pushWinState() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('window:state', { maximized: mainWindow.isMaximized() });
+  }
+}
+
+/** 扫描壁纸目录，返回支持的视频/图片文件（file:// URL 列表） */
+const WALLPAPER_VIDEO_EXT = ['.mp4', '.webm', '.mov', '.mkv', '.avi', '.gif'];
+const WALLPAPER_IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.webp', '.bmp'];
+
+function scanWallpaperDir(dir) {
+  const videos = [];
+  const images = [];
+  if (!fs.existsSync(dir)) return { videos, images, dir };
+  for (const name of fs.readdirSync(dir)) {
+    const ext = path.extname(name).toLowerCase();
+    const full = path.join(dir, name);
+    if (!fs.statSync(full).isFile()) continue;
+    if (WALLPAPER_VIDEO_EXT.includes(ext)) videos.push('file:///' + full.replace(/\\/g, '/'));
+    else if (WALLPAPER_IMAGE_EXT.includes(ext)) images.push('file:///' + full.replace(/\\/g, '/'));
+  }
+  videos.sort();
+  images.sort();
+  return { videos, images, dir };
+}
+
 async function loadDsh() {
+  if (!guestContents) return;
   try {
-    await dshView.webContents.loadURL(appSettings.dshUrl);
+    await guestContents.loadURL(appSettings.dshUrl);
   } catch (e) {
     // did-fail-load 会接管
   }
@@ -177,10 +178,10 @@ async function loadDsh() {
 
 function maybeInjectWatcher() {
   if (!pluginEnabled('memory-plugin')) return;
-  if (!dshView || dshView.webContents.isDestroyed()) return;
-  const url = dshView.webContents.getURL();
+  if (!guestContents || guestContents.isDestroyed()) return;
+  const url = guestContents.getURL();
   if (!url.startsWith('http')) return; // 只在 DSH 页面注入
-  dshView.webContents
+  guestContents
     .executeJavaScript(watcherScript, true)
     .catch(() => { /* 页面可能尚未就绪，忽略 */ });
 }
@@ -327,25 +328,44 @@ function deactivatePlugins() {
 
 // ================= 内置插件行为 =================
 
+/**
+ * 应用壁纸设置。
+ * mode 'window'（默认）→ 客户端窗口背景，由 shell 页面渲染，无需操作系统桌面；
+ * mode 'desktop' → Wallpaper Engine 风格，挂载到 Windows 系统桌面图标之下。
+ */
 async function applyWallpaperPlugin() {
   const w = appSettings.wallpaper;
-  if (!pluginEnabled('wallpaper-plugin') || !w.enabled) {
+  const enabled = pluginEnabled('wallpaper-plugin') && !!w.enabled;
+  if (!enabled) {
     await wallpaperEngine.stop();
+    broadcast('wallpaper:changed', {});
     return;
   }
-  if (w.type === 'video' && w.source) {
-    try {
-      await wallpaperEngine.startVideo(w.source);
-    } catch (e) {
-      console.warn(`[wallpaper] 启动失败: ${e.message}`);
+  if (w.mode === 'desktop') {
+    if (w.type === 'video' && w.source) {
+      try {
+        await wallpaperEngine.startVideo(w.source);
+      } catch (e) {
+        console.warn(`[wallpaper] 桌面壁纸启动失败: ${e.message}`);
+      }
+    } else if (w.type === 'web' && w.source) {
+      try {
+        await wallpaperEngine.startWeb(w.source);
+      } catch (e) {
+        console.warn(`[wallpaper] 桌面壁纸启动失败: ${e.message}`);
+      }
+    } else if (w.type === 'dir' && w.source) {
+      try {
+        const scan = scanWallpaperDir(w.source);
+        await wallpaperEngine.startDir(scan, w.interval || 60);
+      } catch (e) {
+        console.warn(`[wallpaper] 桌面壁纸目录启动失败: ${e.message}`);
+      }
     }
-  } else if (w.type === 'web' && w.source) {
-    try {
-      await wallpaperEngine.startWeb(w.source);
-    } catch (e) {
-      console.warn(`[wallpaper] 启动失败: ${e.message}`);
-    }
+  } else {
+    await wallpaperEngine.stop();
   }
+  broadcast('wallpaper:changed', { settings: w, enabled });
 }
 
 // ================= IPC =================
@@ -451,10 +471,10 @@ function registerIpc() {
   ipcMain.handle('memory:handoff', () => memoryService.getHandoff());
   ipcMain.handle('memory:conversations', () => memoryService.listConversations());
   ipcMain.handle('memory:inject-handoff', async () => {
-    if (!dshView || dshView.webContents.isDestroyed()) return { ok: false, error: '主窗口未打开' };
+    if (!guestContents || guestContents.isDestroyed()) return { ok: false, error: '主窗口未打开' };
     const handoff = await memoryService.getHandoff();
     if (!handoff) return { ok: false, error: '暂无交接摘要' };
-    const ok = await dshView.webContents
+    const ok = await guestContents
       .executeJavaScript(injectHandoffScript(handoff.summary), true)
       .catch(() => false);
     return { ok: !!ok, error: ok ? null : '未能注入（对话框可能不可用，请手动复制粘贴）' };
@@ -476,37 +496,56 @@ function registerIpc() {
     return { ok: true };
   });
 
+  // —— 窗口控制（自定义标题栏）——
+  ipcMain.handle('window:minimize', () => { mainWindow?.minimize(); return { ok: true }; });
+  ipcMain.handle('window:maximize-toggle', () => {
+    if (!mainWindow) return { ok: false };
+    mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize();
+    return { ok: true, maximized: mainWindow.isMaximized() };
+  });
+  ipcMain.handle('window:close', () => { mainWindow?.close(); return { ok: true }; });
+  ipcMain.handle('window:state', () => ({ maximized: !!mainWindow?.isMaximized() }));
+
   ipcMain.handle('wallpaper:state', () => ({
-    active: wallpaperEngine.isActive(),
+    active: pluginEnabled('wallpaper-plugin') && !!appSettings.wallpaper.enabled,
     supported: wallpaperEngine.supported,
     settings: appSettings.wallpaper,
   }));
   ipcMain.handle('wallpaper:start-video', async (_e, file) => {
     if (!pluginEnabled('wallpaper-plugin')) return { ok: false, error: '壁纸插件已关闭，请先在 推荐/插件 中启用' };
-    appSettings.wallpaper = { type: 'video', source: String(file), enabled: true };
+    const mode = (appSettings.wallpaper && appSettings.wallpaper.mode) || 'window';
+    appSettings.wallpaper = { ...appSettings.wallpaper, type: 'video', source: String(file), enabled: true, mode };
     saveAppSettings();
-    try {
-      await wallpaperEngine.startVideo(String(file));
-      return { ok: true };
-    } catch (e) {
-      return { ok: false, error: e.message };
-    }
+    await applyWallpaperPlugin();
+    return { ok: true };
   });
   ipcMain.handle('wallpaper:start-web', async (_e, url) => {
     if (!pluginEnabled('wallpaper-plugin')) return { ok: false, error: '壁纸插件已关闭，请先在 推荐/插件 中启用' };
-    appSettings.wallpaper = { type: 'web', source: String(url), enabled: true };
+    const mode = (appSettings.wallpaper && appSettings.wallpaper.mode) || 'window';
+    appSettings.wallpaper = { ...appSettings.wallpaper, type: 'web', source: String(url), enabled: true, mode };
     saveAppSettings();
-    try {
-      await wallpaperEngine.startWeb(String(url));
-      return { ok: true };
-    } catch (e) {
-      return { ok: false, error: e.message };
-    }
+    await applyWallpaperPlugin();
+    return { ok: true };
   });
+  ipcMain.handle('wallpaper:start-dir', async (_e, dir) => {
+    if (!pluginEnabled('wallpaper-plugin')) return { ok: false, error: '壁纸插件已关闭，请先在 推荐/插件 中启用' };
+    dir = String(dir || '');
+    const scan = scanWallpaperDir(dir);
+    if (!scan.videos.length && !scan.images.length) {
+      return { ok: false, error: `目录中没有支持的壁纸文件（视频: ${WALLPAPER_VIDEO_EXT.join(' ')}；图片: ${WALLPAPER_IMAGE_EXT.join(' ')}）` };
+    }
+    const mode = (appSettings.wallpaper && appSettings.wallpaper.mode) || 'window';
+    const interval = (appSettings.wallpaper && appSettings.wallpaper.interval) || 60;
+    appSettings.wallpaper = { ...appSettings.wallpaper, type: 'dir', source: dir, enabled: true, mode, interval };
+    saveAppSettings();
+    await applyWallpaperPlugin();
+    return { ok: true, files: scan };
+  });
+  ipcMain.handle('wallpaper:files', (_e, dir) => scanWallpaperDir(String(dir || '')));
   ipcMain.handle('wallpaper:stop', async () => {
     appSettings.wallpaper = { ...appSettings.wallpaper, enabled: false };
     saveAppSettings();
-    await wallpaperEngine.stop();
+    await applyWallpaperPlugin();
     return { ok: true };
   });
   ipcMain.handle('wallpaper:settings:get', () => appSettings.wallpaper);
@@ -522,6 +561,13 @@ function registerIpc() {
       title: '选择视频壁纸',
       filters: [{ name: '视频', extensions: ['mp4', 'webm', 'mov', 'mkv', 'avi', 'gif'] }],
       properties: ['openFile'],
+    });
+    return r.canceled ? null : r.filePaths[0];
+  });
+  ipcMain.handle('dialog:pick-dir', async () => {
+    const r = await dialog.showOpenDialog(settingsWindow || mainWindow, {
+      title: '选择壁纸目录（自动轮换）',
+      properties: ['openDirectory'],
     });
     return r.canceled ? null : r.filePaths[0];
   });
@@ -560,7 +606,16 @@ app.whenReady().then(async () => {
     await boot();
     if (process.env.DSH_DESKTOP_SMOKE === '1') {
       console.log('[smoke] app boot OK');
-      setTimeout(() => app.exit(0), 2000);
+      // 验证 shell + 内嵌 DSH webview 已就绪
+      setTimeout(async () => {
+        const shellLoaded = mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.getURL().includes('shell.html');
+        const guest = guestContents && !guestContents.isDestroyed() ? guestContents.getURL() : '(无)';
+        const dom = await mainWindow.webContents
+          .executeJavaScript(`(() => { const w = document.querySelector('webview'); if (!w) return 'NO_WEBVIEW'; try { return 'ID=' + w.getWebContentsId(); } catch (e) { return 'NOT_ATTACHED:' + e.message; } })()`, true)
+          .catch((e) => 'JSERR:' + e.message);
+        console.log(`[smoke] shell=${shellLoaded ? 'OK' : 'FAIL'} guest=${guest} dom=${dom}`);
+        app.exit(0);
+      }, 6000);
     }
   } catch (e) {
     console.error('[main] 启动失败:', e);
@@ -604,12 +659,12 @@ async function boot() {
   await activatePlugins();
   await applyWallpaperPlugin();
 
-  // 启动时若有交接摘要且开启自动注入 → 注入（默认关闭）
+  // 启动时若有交接摘要且开启自动注入 → 注入
   if (memoryService.loadSettings().autoInjectHandoff) {
     setTimeout(async () => {
       const handoff = await memoryService.getHandoff();
-      if (handoff && mainWindow && !mainWindow.isDestroyed()) {
-        const ok = await mainWindow.webContents
+      if (handoff && guestContents && !guestContents.isDestroyed()) {
+        const ok = await guestContents
           .executeJavaScript(injectHandoffScript(handoff.summary), true)
           .catch(() => false);
         if (ok) console.log('[memory] 已自动注入上次会话交接摘要');
@@ -625,7 +680,7 @@ function createTray() {
 /** 向所有 UI 窗口广播事件 */
 function broadcast(channel, data) {
   if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.webContents.send(channel, data);
-  if (sidebarView && !sidebarView.webContents.isDestroyed()) sidebarView.webContents.send(channel, data);
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, data);
 }
 
 app.on('second-instance', () => {

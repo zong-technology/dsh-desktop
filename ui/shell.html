@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; media-src 'self' file: data: blob:; frame-src *">
+<title>DSH Desktop</title>
+<style>
+  :root {
+    --bg: #10131a; --bg2: #171b24; --border: #232a37;
+    --text: #e6e9ef; --muted: #8b93a3;
+    --accent: #4f8cff; --accent2: #7c5cff;
+    --green: #34c759; --red: #ff5f57; --yellow: #ffd60a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; }
+  body { background: var(--bg); color: var(--text); font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; font-size: 13px; display: flex; flex-direction: column; user-select: none; }
+
+  /* ===== 自定义标题栏（无边框窗口）===== */
+  .titlebar {
+    height: 40px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    padding-left: 12px;
+    background: linear-gradient(90deg, rgba(26,30,42,.92), rgba(16,19,26,.88));
+    border-bottom: 1px solid var(--border);
+    -webkit-app-region: drag;
+    z-index: 40;
+    position: relative;
+  }
+  .titlebar .app-icon { width: 18px; height: 18px; border-radius: 4px; margin-right: 8px; }
+  .titlebar .title { font-size: 12.5px; color: var(--muted); font-weight: 600; letter-spacing: .3px; }
+  .titlebar .win-controls { margin-left: auto; display: flex; height: 100%; -webkit-app-region: no-drag; }
+  .titlebar .win-controls button {
+    width: 46px; height: 100%; border: none; background: transparent; color: var(--text);
+    font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    position: relative;
+  }
+  .titlebar .win-controls button svg { width: 12px; height: 12px; fill: currentColor; }
+  /* 特别颜色：渐变紫蓝控制按钮 */
+  .titlebar .win-controls button.wc-min, .titlebar .win-controls button.wc-max {
+    background: linear-gradient(180deg, rgba(79,140,255,.14), rgba(124,92,255,.14));
+    border-left: 1px solid rgba(79,140,255,.22);
+  }
+  .titlebar .win-controls button.wc-min:hover { background: linear-gradient(180deg, rgba(79,140,255,.45), rgba(124,92,255,.45)); }
+  .titlebar .win-controls button.wc-max:hover { background: linear-gradient(180deg, rgba(79,140,255,.45), rgba(124,92,255,.45)); }
+  .titlebar .win-controls button.wc-close {
+    background: linear-gradient(180deg, rgba(255,95,87,.16), rgba(255,45,85,.16));
+    border-left: 1px solid rgba(255,95,87,.25);
+  }
+  .titlebar .win-controls button.wc-close:hover { background: linear-gradient(180deg, #ff453a, #d70015); color: #fff; }
+
+  #content { flex: 1; display: flex; overflow: hidden; }
+
+  /* ===== 左侧功能边栏 ===== */
+  .side { width: 252px; flex-shrink: 0; background: rgba(16,19,26,.97); border-right: 1px solid var(--border); display: flex; flex-direction: column; z-index: 30; }
+  .brand { display: flex; align-items: center; gap: 8px; padding: 14px 14px 10px; }
+  .brand img { width: 22px; height: 22px; border-radius: 5px; }
+  .brand .name { font-weight: 700; font-size: 13.5px; }
+  .brand .ver { color: var(--muted); font-size: 10.5px; margin-left: 2px; }
+
+  .status { display: flex; align-items: center; gap: 7px; margin: 0 12px 10px; padding: 7px 10px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; font-size: 11.5px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); flex-shrink: 0; }
+  .dot.on { background: var(--green); box-shadow: 0 0 6px rgba(52,199,89,.7); }
+  .status .txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .nav { display: flex; flex-direction: column; gap: 2px; padding: 4px 10px; }
+  .nav .group-label { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .8px; padding: 8px 8px 4px; }
+  .nav button { display: flex; align-items: center; gap: 10px; width: 100%; background: transparent; border: none; color: var(--text); padding: 9px 10px; border-radius: 8px; cursor: pointer; font-size: 13px; text-align: left; }
+  .nav button:hover { background: rgba(255,255,255,.06); }
+  .nav button .ic { font-size: 15px; width: 20px; text-align: center; }
+
+  .quick { padding: 8px 12px; border-top: 1px solid var(--border); margin-top: 4px; }
+  .quick .row { display: flex; align-items: center; justify-content: space-between; padding: 7px 2px; }
+  .quick .row .lbl { display: flex; align-items: center; gap: 8px; }
+  .quick .row .lbl .ic { font-size: 14px; }
+  .quick .btn { width: 100%; margin-top: 6px; background: var(--bg2); border: 1px solid var(--border); color: var(--text); padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 12.5px; }
+  .quick .btn:hover { filter: brightness(1.15); }
+  .quick .btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); border: none; color: #fff; font-weight: 600; }
+
+  .switch { width: 38px; height: 21px; border-radius: 12px; background: #333b4c; border: none; position: relative; cursor: pointer; padding: 0; flex-shrink: 0; transition: background .2s; }
+  .switch::after { content: ""; position: absolute; width: 15px; height: 15px; border-radius: 50%; background: #fff; top: 3px; left: 3px; transition: left .2s; }
+  .switch.on { background: linear-gradient(135deg, var(--accent), var(--accent2)); }
+  .switch.on::after { left: 20px; }
+
+  .handoff-preview { margin: 0 12px 10px; padding: 9px 10px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; font-size: 11px; color: var(--muted); line-height: 1.55; max-height: 96px; overflow: hidden; white-space: pre-wrap; }
+  .handoff-preview b { color: var(--yellow); }
+
+  .foot { margin-top: auto; padding: 10px 14px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .foot a { color: var(--muted); text-decoration: none; font-size: 11.5px; cursor: pointer; }
+  .foot a:hover { color: var(--accent); }
+  .foot .quit { color: var(--red); }
+
+  /* ===== 右侧舞台：壁纸背景层 + DSH 内容 ===== */
+  .stage { flex: 1; position: relative; overflow: hidden; background: linear-gradient(160deg, #141926, #0c0f15); }
+  .stage .bg { position: absolute; inset: 0; z-index: 1; }
+  .stage .bg video { width: 100%; height: 100%; object-fit: cover; }
+  .stage .bg iframe { width: 100%; height: 100%; border: none; }
+  .stage .bg img { width: 100%; height: 100%; object-fit: cover; }
+  #wp-media-box { width: 100%; height: 100%; }
+  #wp-media-box video, #wp-media-box img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .stage .bg.off { background: linear-gradient(160deg, #141926, #0c0f15); }
+  .stage .bg .shade { position: absolute; inset: 0; background: rgba(10,12,18,.45); }
+
+  webview#dsh { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; display: flex; }
+  webview#dsh.hidden { display: none; }
+
+  .offline-card { position: absolute; inset: 0; z-index: 5; display: none; align-items: center; justify-content: center; background: rgba(10,12,18,.55); backdrop-filter: blur(3px); }
+  .offline-card.show { display: flex; }
+  .offline-card .box { background: rgba(22,26,34,.92); border: 1px solid var(--border); border-radius: 14px; padding: 28px 36px; text-align: center; max-width: 420px; }
+  .offline-card h2 { font-size: 17px; margin-bottom: 8px; }
+  .offline-card p { color: var(--muted); font-size: 12.5px; margin-bottom: 14px; word-break: break-all; }
+  .offline-card .btn { background: linear-gradient(135deg, var(--accent), var(--accent2)); border: none; color: #fff; padding: 9px 22px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; }
+  .offline-card .btn:hover { filter: brightness(1.15); }
+
+  .wp-badge { position: absolute; right: 14px; bottom: 12px; z-index: 6; font-size: 11px; color: rgba(255,255,255,.65); background: rgba(0,0,0,.35); border-radius: 20px; padding: 4px 10px; display: none; }
+  .wp-badge.show { display: block; }
+</style>
+</head>
+<body>
+  <!-- 自定义标题栏（无边框窗口） -->
+  <div class="titlebar">
+    <img class="app-icon" src="assets/icon.png" alt="">
+    <span class="title">DSH Desktop — DeepSeek Harness 桌面客户端</span>
+    <div class="win-controls">
+      <button class="wc-min" id="btn-min" title="最小化">
+        <svg viewBox="0 0 12 12"><rect x="0" y="5.5" width="12" height="1.2" rx="0.6"/></svg>
+      </button>
+      <button class="wc-max" id="btn-max" title="最大化/还原">
+        <svg viewBox="0 0 12 12" id="ic-max"><rect x="1" y="1" width="10" height="10" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+      </button>
+      <button class="wc-close" id="btn-close" title="关闭">
+        <svg viewBox="0 0 12 12"><path d="M1 1 L11 11 M11 1 L1 11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div id="content">
+  <!-- 左侧功能边栏 -->
+  <aside class="side">
+    <div class="brand">
+      <img src="assets/icon.png" alt="">
+      <span class="name">DSH Desktop</span>
+      <span class="ver" id="ver"></span>
+    </div>
+    <div class="status" id="dsh-status">
+      <span class="dot" id="status-dot"></span>
+      <span class="txt" id="status-txt">正在检测 DSH…</span>
+    </div>
+    <div class="nav">
+      <div class="group-label">功能中心</div>
+      <button data-tab="plugins"><span class="ic">🧩</span>插件中心</button>
+      <button data-tab="recommended"><span class="ic">⭐</span>推荐安装</button>
+      <button data-tab="memory"><span class="ic">🧠</span>上下文记忆</button>
+      <button data-tab="wallpaper"><span class="ic">🎨</span>动态壁纸</button>
+      <button data-tab="about"><span class="ic">ℹ️</span>关于</button>
+      <div class="group-label" style="margin-top:6px">快捷操作</div>
+      <button id="btn-summary"><span class="ic">📝</span>立即生成交接摘要</button>
+      <button id="btn-inject"><span class="ic">📥</span>注入摘要到对话框</button>
+      <button id="btn-preview-wp"><span class="ic">🖼️</span>预览壁纸背景</button>
+    </div>
+    <div id="handoff-box" class="handoff-preview" style="display:none"></div>
+    <div class="quick">
+      <div class="row"><span class="lbl"><span class="ic">🧠</span>上下文记忆</span><button class="switch" id="sw-memory"></button></div>
+      <div class="row"><span class="lbl"><span class="ic">🎨</span>客户端壁纸</span><button class="switch" id="sw-wallpaper"></button></div>
+      <button class="btn" id="btn-settings">⚙️ 打开完整设置窗口</button>
+    </div>
+    <div class="foot">
+      <a id="lnk-github">GitHub</a>
+      <a id="lnk-quit" class="quit">退出</a>
+    </div>
+  </aside>
+
+  <!-- 右侧舞台：壁纸背景 + DSH -->
+  <div class="stage">
+    <div class="bg off" id="bg">
+      <div class="shade"></div>
+    </div>
+    <webview id="dsh" src="about:blank" preload="preload-main.js" webpreferences="contextIsolation=yes, sandbox=yes"></webview>
+
+    <div class="offline-card" id="offline">
+      <div class="box">
+        <h2>🛰 DSH 服务未运行</h2>
+        <p id="offline-url">http://127.0.0.1:3080</p>
+        <p>请先启动 DeepSeek Harness Web（dsh web），然后重试。</p>
+        <button class="btn" id="btn-retry">🔄 重试连接</button>
+      </div>
+    </div>
+    <div class="wp-badge" id="wp-badge">🎨 客户端壁纸已开启</div>
+  </div>
+  </div>
+
+  <script src="shell.js"></script>
+</body>
+</html>
