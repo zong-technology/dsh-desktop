@@ -45,6 +45,87 @@
       "source": { "github": "zong-technology/dsh-desktop:plugins/markdown-export" }
     },
     {
+      "id": "chat-stats",
+      "name": "会话统计（GitHub 官方）",
+      "kind": "plugin",
+      "recommended": true,
+      "version": "1.0.0",
+      "description": "统计当前 DSH 会话的消息数、总字数与时长，托盘一键查看，无需离开页面。",
+      "author": "DSH Desktop",
+      "tags": ["统计", "GitHub"],
+      "source": { "github": "zong-technology/dsh-desktop:plugins/chat-stats" }
+    },
+    {
+      "id": "quick-prompts",
+      "name": "快捷提示词（GitHub 官方）",
+      "kind": "plugin",
+      "recommended": true,
+      "version": "1.0.0",
+      "description": "托盘一键复制常用提示词（翻译 / 总结 / 代码审查 / 日报）到剪贴板，配合 DSH 直接粘贴使用。",
+      "author": "DSH Desktop",
+      "tags": ["提示词", "效率", "GitHub"],
+      "source": { "github": "zong-technology/dsh-desktop:plugins/quick-prompts" }
+    },
+    {
+      "id": "dsh-vision",
+      "name": "视觉看图（DSH 官方生态）",
+      "kind": "dsh-plugin",
+      "recommended": true,
+      "version": "rc.6/rc.7",
+      "description": "让 DeepSeek Harness 直接「看图」：支持图片的模型直通原图；纯文本模型（deepseek-official）自动调用外部视觉模型观察原图后再由 DeepSeek 回答。在对话里粘贴或拖入图片即可。",
+      "author": "oil-oil",
+      "tags": ["视觉", "看图", "DSH插件"],
+      "github": "https://github.com/oil-oil/dsh-vision",
+      "installCmd": "npx @deepseek-ai/dsh plugin --profile web add github:oil-oil/dsh-vision"
+    },
+    {
+      "id": "dsh-image-gen",
+      "name": "对话生图（DSH 官方生态）",
+      "kind": "dsh-plugin",
+      "recommended": true,
+      "version": "latest",
+      "description": "直接在 DeepSeek Harness 对话里生成图片：对 Agent 说「帮我画一张…」即可自动调用 generate_image，图片直接显示在当前对话中。安装后在 DSH 设置填自己的 API Key。",
+      "author": "shanliuling",
+      "tags": ["生图", "图片", "DSH插件"],
+      "github": "https://github.com/shanliuling/dsh-image-gen",
+      "installCmd": "npx @deepseek-ai/dsh plugin --profile web add github:shanliuling/dsh-image-gen"
+    },
+    {
+      "id": "modlens",
+      "name": "贴图识别 ModLens（DSH 官方生态）",
+      "kind": "dsh-plugin",
+      "recommended": true,
+      "version": "3.x",
+      "description": "给纯文本模型外挂视觉能力：粘贴图片即得结构化 JSON 证据（OCR / 版面 / 语义），配合 DeepSeek、GLM 等文本模型使用。",
+      "author": "liustack",
+      "tags": ["视觉", "OCR", "DSH插件"],
+      "github": "https://github.com/liustack/modlens",
+      "installCmd": "npx -y @deepseek-ai/dsh plugin --profile web add github:liustack/modlens"
+    },
+    {
+      "id": "image-viewer",
+      "name": "图片查看器（GitHub 官方）",
+      "kind": "plugin",
+      "recommended": true,
+      "version": "1.0.0",
+      "description": "托盘一键打开图片查看器：选择图片目录，幻灯片浏览（←/→ 切换，Esc 关闭），支持 jpg/png/webp/gif/bmp。",
+      "author": "DSH Desktop",
+      "tags": ["图片", "查看", "GitHub"],
+      "source": { "github": "zong-technology/dsh-desktop:plugins/image-viewer" }
+    },
+    {
+      "id": "dsh-vision-router",
+      "name": "看图识别·Vision Router（免费免 Key，DSH 官方生态）",
+      "kind": "dsh-plugin",
+      "recommended": true,
+      "version": "v1.6.x",
+      "description": "给纯文本 DeepSeek Agent 装上「眼睛」：粘贴图片即自动识别内容（OCR/定位/裁剪/取色/像素对比/抠图/截图等 14 个工具）。开箱免费、免 API Key、无需 Python，一条命令安装。",
+      "author": "ysr666",
+      "tags": ["视觉", "识别", "免费", "DSH插件"],
+      "github": "https://github.com/ysr666/dsh-vision-router",
+      "installCmd": "npx @deepseek-ai/dsh plugin --profile web add dsh-vision-router"
+    },
+    {
       "id": "skill-translate",
       "name": "翻译助手 Skill",
       "kind": "skill",
