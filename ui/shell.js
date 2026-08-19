@@ -142,10 +142,13 @@ async function renderWallpaper() {
   }
   const shade = document.createElement('div');
   shade.className = 'shade';
-  const opacity = Math.max(0, Math.min(90, Number(wpState?.opacity ?? 55)));
-  shade.style.opacity = String(opacity / 100);
-  if (opacity < 8) shade.style.background = 'rgba(10,12,18,0)'; // 接近透明遮罩
   bg.appendChild(shade);
+  // 透明度：壁纸媒体不透明度 = slider/100（0=壁纸完全淡出，100=全显示）
+  // 遮罩固定 rgba(10,12,18,.42) 保证文字可读；slider 越低壁纸越淡，变化直观
+  const op = Math.max(0, Math.min(100, Number(wpState?.opacity ?? 100)));
+  bg.querySelectorAll('video, img, iframe, #wp-media-box').forEach((el) => {
+    el.style.opacity = String(op / 100);
+  });
   startBrightnessSampling();
 }
 
@@ -281,7 +284,7 @@ async function refreshWallpaperState() {
   const s = await api.invoke('wallpaper:state').catch(() => null);
   if (s) {
     wpState = { ...s.settings, active: s.active };
-    const op = Math.max(0, Math.min(90, Number(s.settings.opacity ?? 55)));
+    const op = Math.max(0, Math.min(100, Number(s.settings.opacity ?? 100)));
     const el = $('#wp-opacity');
     const val = $('#wp-opacity-val');
     if (el) el.value = String(op);
