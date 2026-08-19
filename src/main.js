@@ -610,10 +610,30 @@ app.whenReady().then(async () => {
       setTimeout(async () => {
         const shellLoaded = mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.getURL().includes('shell.html');
         const guest = guestContents && !guestContents.isDestroyed() ? guestContents.getURL() : '(无)';
-        const dom = await mainWindow.webContents
-          .executeJavaScript(`(() => { const w = document.querySelector('webview'); if (!w) return 'NO_WEBVIEW'; try { return 'ID=' + w.getWebContentsId(); } catch (e) { return 'NOT_ATTACHED:' + e.message; } })()`, true)
-          .catch((e) => 'JSERR:' + e.message);
-        console.log(`[smoke] shell=${shellLoaded ? 'OK' : 'FAIL'} guest=${guest} dom=${dom}`);
+        // 壁纸客户端背景渲染验证（window 模式 + web 壁纸 → #bg 出现 iframe）
+        // 临时启用插件并备份/恢复用户设置
+        let wpOk = 'skip';
+        const settingsPath = userDataFile('settings.json');
+        const backup = fs.existsSync(settingsPath) ? fs.readFileSync(settingsPath, 'utf8') : null;
+        try {
+          appSettings.plugins = appSettings.plugins || {};
+          appSettings.plugins['wallpaper-plugin'] = { enabled: true };
+          appSettings.wallpaper = { type: 'web', source: 'https://example.com', enabled: true, mode: 'window' };
+          saveAppSettings();
+          await applyWallpaperPlugin();
+          await new Promise((r) => setTimeout(r, 1500));
+          wpOk = await mainWindow.webContents
+            .executeJavaScript(`!!document.querySelector('#bg iframe')`, true)
+            .catch(() => 'jserr');
+        } catch (e) {
+          wpOk = 'err:' + e.message;
+        } finally {
+          if (backup !== null) fs.writeFileSync(settingsPath, backup, 'utf8');
+          else fs.rmSync(settingsPath, { force: true });
+          loadAppSettings();
+          await applyWallpaperPlugin();
+        }
+        console.log(`[smoke] shell=${shellLoaded ? 'OK' : 'FAIL'} guest=${guest} wallpaperClient=${wpOk ? 'OK' : wpOk}`);
         app.exit(0);
       }, 6000);
     }
