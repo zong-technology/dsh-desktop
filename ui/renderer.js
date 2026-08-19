@@ -130,26 +130,38 @@ async function renderRecommended() {
   for (const item of r.items) {
     const card = document.createElement('div');
     card.className = 'rec-card';
-    const kindCls = item.builtin ? 'builtin' : item.kind === 'skill' ? 'skill' : 'plugin';
-    const kindLabel = item.builtin ? '内置' : item.kind === 'skill' ? 'Skill' : '插件';
+    const kindCls = item.builtin ? 'builtin' : item.kind === 'skill' ? 'skill' : item.kind === 'dsh-plugin' ? 'dsh' : 'plugin';
+    const kindLabel = item.builtin ? '内置' : item.kind === 'skill' ? 'Skill' : item.kind === 'dsh-plugin' ? 'DSH 插件' : '插件';
+    const srcLabel = item.builtin ? '系统内置' : item.source && item.source.github ? 'GitHub' : item.source && item.source.local ? '本地包' : item.kind === 'skill' ? '官方 Skill' : '远程';
+    const srcCls = item.source && item.source.github ? 'green' : item.builtin ? 'blue' : '';
+    const verLabel = item.version && item.version !== 'builtin' ? item.version : '';
     const installed = plugins.find((p) => p.id === item.id);
     const enabled = installed ? installed.enabled : item.builtin ? (item.id === 'memory-plugin' ? info.builtins.memoryPlugin : info.builtins.wallpaperPlugin) : !!item.enabledState;
+    // 生成一键安装 spec：source.github → "owner/repo[:子目录]"；source.local → "local:路径"
+    const installSpec = item.installSpec
+      || (item.source && item.source.github)
+      || (item.source && item.source.local ? 'local:' + item.source.local : null);
 
     let actionHtml = '';
     if (item.kind === 'skill') {
       actionHtml = `
         <button class="switch ${enabled ? 'on' : ''}" title="启用/停用"></button>
         <button data-copy-prompt>复制提示词</button>`;
+    } else if (item.kind === 'dsh-plugin') {
+      actionHtml = `
+        <button data-copy-cmd>📋 复制安装命令</button>
+        <button data-open-gh>打开 GitHub</button>`;
     } else if (installed) {
       actionHtml = `<button class="switch ${enabled ? 'on' : ''}" title="启用/停用"></button>`;
-    } else if (item.installSpec) {
-      actionHtml = `<button class="primary" data-install-spec="${esc(item.installSpec)}">安装</button>`;
+    } else if (installSpec) {
+      actionHtml = `<button class="primary" data-install-spec="${esc(installSpec)}">一键安装</button>`;
     } else {
       actionHtml = `<span class="badge">来源待配置</span>`;
     }
 
     card.innerHTML = `
-      <div class="rname">${esc(item.name)} <span class="kind ${kindCls}">${kindLabel}</span></div>
+      <div class="rname">${esc(item.name)} <span class="kind ${kindCls}">${kindLabel}</span>
+        <span class="badge ${srcCls}">${srcLabel}</span>${verLabel ? `<span class="badge">v${esc(verLabel)}</span>` : ''}</div>
       <div class="rdesc">${esc(item.description || '')}</div>
       <div class="ract">${actionHtml}</div>`;
 
@@ -162,6 +174,17 @@ async function renderRecommended() {
         await api.invoke('app:copy', item.prompt || '');
         toast('提示词已复制到剪贴板', 'ok');
       };
+    }
+    const cc = card.querySelector('[data-copy-cmd]');
+    if (cc) {
+      cc.onclick = async () => {
+        await api.invoke('app:copy', item.installCmd || '');
+        toast('安装命令已复制：在终端粘贴执行，然后重启 DSH', 'ok');
+      };
+    }
+    const og = card.querySelector('[data-open-gh]');
+    if (og) {
+      og.onclick = () => api.invoke('app:open-external', item.github || 'https://github.com');
     }
     const inst = card.querySelector('[data-install-spec]');
     if (inst) {
@@ -414,6 +437,13 @@ async function init() {
   $('#btn-inject-handoff').onclick = async () => {
     const r = await api.invoke('memory:inject-handoff');
     r.ok ? toast('已注入到 DSH 对话框，请检查后发送', 'ok') : toast('注入失败: ' + r.error, 'err');
+  };
+  $('#btn-import-session').onclick = async () => {
+    toast('正在提取 DSH 页面会话文本…');
+    const r = await api.invoke('memory:import-from-page');
+    if (!r.ok) { toast('导入失败: ' + r.error, 'err'); return; }
+    toast(`已导入 ${r.chars} 字符并生成交接摘要`, 'ok');
+    await refreshHandoff();
   };
 
   $('#btn-open-github').onclick = () => api.invoke('app:open-external', 'https://github.com/zong-technology/dsh-desktop');
