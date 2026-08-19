@@ -280,6 +280,14 @@ async function renderWallpaper() {
   if (radioMode) radioMode.checked = true;
   $('#wp-source').value = st.settings.source || '';
   $('#wp-interval').value = st.settings.interval || 60;
+  const op = Math.max(0, Math.min(90, Number(st.settings.opacity ?? 55)));
+  $('#wp-opacity').value = String(op);
+  $('#wp-opacity-val').textContent = String(op);
+  $('#wp-opacity').oninput = async () => {
+    const v = Number($('#wp-opacity').value);
+    $('#wp-opacity-val').textContent = String(v);
+    await api.invoke('wallpaper:settings:set', { opacity: v });
+  };
 
   const updateState = (st2) => {
     $('#wp-state').innerHTML = `
