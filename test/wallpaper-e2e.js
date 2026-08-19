@@ -28,6 +28,9 @@ app.whenReady().then(async () => {
   }));
   ipcMain.handle('wallpaper:state', () => ({ settings: WP, active: true }));
   ipcMain.handle('wallpaper:files', () => ({ videos: [], images: [] }));
+  ipcMain.handle('wallpaper:brightness', () => ({ ok: true }));
+  ipcMain.handle('wallpaper:settings:set', () => ({}));
+  ipcMain.handle('dsh:status', () => ({}));
   ipcMain.handle('app:version', () => '0.1.0');
   ipcMain.handle('memory:handoff', () => null);
 
