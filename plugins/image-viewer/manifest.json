@@ -1,0 +1,14 @@
+{
+  "id": "image-viewer",
+  "name": "图片查看器",
+  "version": "1.0.0",
+  "kind": "plugin",
+  "description": "托盘一键打开图片查看器：选择图片目录，幻灯片浏览（左右键切换，支持 jpg/png/webp/gif/bmp）。",
+  "author": "DSH Desktop",
+  "main": "main.js",
+  "test": "test.js",
+  "compat": {
+    "os": ["win32", "linux", "darwin"],
+    "electron": ">=28"
+  }
+}
