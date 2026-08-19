@@ -119,9 +119,16 @@ async function renderWallpaper() {
     const show = (i) => {
       const u = wpFiles[i % wpFiles.length];
       box.innerHTML = '';
+      // 新媒体就绪后立即采样亮度 → 文字颜色快速匹配（避免轮换后短暂不清晰）
+      const onReady = () => {
+        wpBrightStable = 0;
+        wpBrightLast = null;
+        setTimeout(sampleWallpaperBrightness, 60);
+      };
       if (/\.(jpg|jpeg|png|webp|bmp)([?#]|$)/i.test(u)) {
         const img = document.createElement('img');
         img.src = toFileUrl(u);
+        img.onload = onReady;
         box.appendChild(img);
       } else {
         const v = document.createElement('video');
@@ -130,6 +137,7 @@ async function renderWallpaper() {
         v.muted = true;
         v.loop = true;
         v.playsInline = true;
+        v.onloadeddata = onReady;
         box.appendChild(v);
       }
     };
@@ -153,33 +161,61 @@ async function renderWallpaper() {
 }
 
 let wpBrightTimer = null;
+let wpBrightStable = 0;
+let wpBrightLast = null;
 
-/** 周期采样壁纸平均亮度 → 通知主进程切换 DSH 文字颜色（亮壁纸深字/暗壁纸浅字） */
+/**
+ * 采样当前壁纸平均亮度 → 通知主进程切换 DSH 文字颜色。
+ * 防抖：连续 2 次采样结果一致才切换，避免轮换瞬间/视频变化导致文字颜色抖动。
+ * 媒体未就绪（readyState<2）时返回 false，调用方可稍后重试。
+ */
+function sampleWallpaperBrightness() {
+  const media = document.querySelector('#bg video, #bg img, #wp-media-box video, #wp-media-box img');
+  if (!media || media.readyState < 2) return false;
+  try {
+    const c = document.createElement('canvas');
+    c.width = 48;
+    c.height = 27;
+    const ctx = c.getContext('2d');
+    if (!ctx) return false;
+    ctx.drawImage(media, 0, 0, 48, 27);
+    const d = ctx.getImageData(0, 0, 48, 27).data;
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 16) {
+      sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
+      n++;
+    }
+    if (!n) return false;
+    const dark = sum / n < 128;
+    if (dark === wpBrightLast) {
+      wpBrightStable++;
+    } else {
+      wpBrightStable = 0;
+      wpBrightLast = dark;
+    }
+    // 连续 2 次一致（含首次）才通知主进程切换
+    if (wpBrightStable >= 1) {
+      api.invoke('wallpaper:brightness', { dark });
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function startBrightnessSampling() {
   if (wpBrightTimer) return;
-  const sample = () => {
-    const media = document.querySelector('#bg video, #bg img, #wp-media-box video, #wp-media-box img');
-    if (!media || media.readyState < 2) return;
-    try {
-      const c = document.createElement('canvas');
-      c.width = 48;
-      c.height = 27;
-      const ctx = c.getContext('2d');
-      if (!ctx) return;
-      ctx.drawImage(media, 0, 0, 48, 27);
-      const d = ctx.getImageData(0, 0, 48, 27).data;
-      let sum = 0;
-      let n = 0;
-      for (let i = 0; i < d.length; i += 16) {
-        sum += (d[i] + d[i + 1] + d[i + 2]) / 3;
-        n++;
-      }
-      if (!n) return;
-      api.invoke('wallpaper:brightness', { dark: sum / n < 128 });
-    } catch (e) {}
-  };
-  sample();
-  wpBrightTimer = setInterval(sample, 3000);
+  sampleWallpaperBrightness();
+  wpBrightTimer = setInterval(() => {
+    // 媒体未就绪（如轮换加载中）→ 稍后重试（快速重试 3 次）
+    if (!sampleWallpaperBrightness()) {
+      let retries = 0;
+      const t = setInterval(() => {
+        if (sampleWallpaperBrightness() || ++retries >= 3) clearInterval(t);
+      }, 500);
+    }
+  }, 2000);
 }
 
 function stopBrightnessSampling() {
@@ -187,6 +223,8 @@ function stopBrightnessSampling() {
     clearInterval(wpBrightTimer);
     wpBrightTimer = null;
   }
+  wpBrightStable = 0;
+  wpBrightLast = null;
 }
 
 /** 预览/确认壁纸背景：会话框始终保留，壁纸作为会话背景直接可见 */
