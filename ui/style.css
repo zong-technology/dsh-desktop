@@ -164,6 +164,21 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .rec-card .rdesc { color: var(--muted); font-size: 12.5px; margin: 6px 0 10px; line-height: 1.55; }
 .rec-card .ract { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* 插件市场筛选 */
+.rec-filters { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.rec-filters input[type="text"] {
+  width: 100%; padding: 9px 12px; background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text); font-size: 13px; outline: none;
+}
+.rec-filters input[type="text"]:focus { border-color: var(--accent); }
+.chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip {
+  background: var(--bg2); border: 1px solid var(--border); color: var(--muted);
+  padding: 4px 12px; border-radius: 14px; cursor: pointer; font-size: 12px; transition: all .15s;
+}
+.chip:hover { color: var(--text); border-color: var(--accent); }
+.chip.on { background: linear-gradient(135deg, var(--accent), var(--accent2)); border-color: transparent; color: #fff; font-weight: 600; }
+
 .kind { font-size: 10.5px; padding: 1px 6px; border-radius: 4px; font-weight: 600; }
 .kind.plugin { background: rgba(79,140,255,.15); color: #7fb0ff; }
 .kind.skill { background: rgba(124,92,255,.15); color: #b39bff; }
