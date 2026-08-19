@@ -202,6 +202,7 @@ async function renderRecommended() {
         <span class="badge ${srcCls}">${srcLabel}</span>${verLabel ? `<span class="badge">v${esc(verLabel)}</span>` : ''}</div>
       <div class="rdesc">${esc(item.description || '')}</div>
       <div class="ract">${actionHtml}</div>`;
+    card.dataset.id = String(item.id || '');
 
     const sw = card.querySelector('.switch');
     if (sw) switchState(card, enabled, null);
