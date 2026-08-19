@@ -112,6 +112,8 @@ function esc(s) {
 
 // ---------- 推荐 Tab ----------
 
+let recFilter = { q: '', kind: 'all', src: 'all', state: 'all' };
+
 async function renderRecommended() {
   const r = await api.invoke('registry:recommended');
   recommended = r;
@@ -120,20 +122,56 @@ async function renderRecommended() {
 
   const container = $('#rec-list');
   container.innerHTML = '';
-  if (!r.items.length) {
-    container.innerHTML = '<div class="empty">暂无推荐</div>';
+  const all = r.items || [];
+  $('#rec-count').textContent = `${all.length} 个`;
+
+  // —— 过滤 ——
+  const q = recFilter.q.trim().toLowerCase();
+  const items = all.filter((item) => {
+    if (recFilter.kind !== 'all') {
+      const k = item.builtin ? 'builtin' : item.kind === 'skill' ? 'skill' : item.kind === 'dsh-plugin' ? 'dsh-plugin' : 'plugin';
+      if (k !== recFilter.kind) return false;
+    }
+    if (recFilter.src !== 'all') {
+      const src = item.marketSource === 'github-market' ? 'github-market'
+        : item.builtin ? 'local'
+        : item.source && item.source.github ? 'github'
+        : item.source && item.source.local ? 'local'
+        : 'local';
+      if (src !== recFilter.src) return false;
+    }
+    if (recFilter.state !== 'all') {
+      const installed = plugins.find((p) => p.id === item.id);
+      const isInst = !!installed || !!item.builtin;
+      if (recFilter.state === 'installed' && !isInst) return false;
+      if (recFilter.state === 'notinstalled' && isInst) return false;
+    }
+    if (q) {
+      const hay = `${item.name} ${item.description || ''} ${(item.tags || []).join(' ')} ${item.author || ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  if (!items.length) {
+    container.innerHTML = '<div class="empty">没有符合条件的插件，换个筛选试试</div>';
     return;
   }
   const grid = document.createElement('div');
   grid.className = 'rec-grid';
 
-  for (const item of r.items) {
+  for (const item of items) {
     const card = document.createElement('div');
     card.className = 'rec-card';
     const kindCls = item.builtin ? 'builtin' : item.kind === 'skill' ? 'skill' : item.kind === 'dsh-plugin' ? 'dsh' : 'plugin';
     const kindLabel = item.builtin ? '内置' : item.kind === 'skill' ? 'Skill' : item.kind === 'dsh-plugin' ? 'DSH 插件' : '插件';
-    const srcLabel = item.builtin ? '系统内置' : item.source && item.source.github ? 'GitHub' : item.source && item.source.local ? '本地包' : item.kind === 'skill' ? '官方 Skill' : '远程';
-    const srcCls = item.source && item.source.github ? 'green' : item.builtin ? 'blue' : '';
+    const srcLabel = item.marketSource === 'github-market' ? 'GitHub 市场'
+      : item.builtin ? '系统内置'
+      : item.source && item.source.github ? '官方仓库'
+      : item.source && item.source.local ? '本地包'
+      : item.kind === 'skill' ? '官方 Skill'
+      : '远程';
+    const srcCls = item.marketSource === 'github-market' ? 'green' : item.source && item.source.github ? 'green' : item.builtin ? 'blue' : '';
     const verLabel = item.version && item.version !== 'builtin' ? item.version : '';
     const installed = plugins.find((p) => p.id === item.id);
     const enabled = installed ? installed.enabled : item.builtin ? (item.id === 'memory-plugin' ? info.builtins.memoryPlugin : info.builtins.wallpaperPlugin) : !!item.enabledState;
@@ -204,6 +242,27 @@ async function renderRecommended() {
     grid.appendChild(card);
   }
   container.appendChild(grid);
+
+  // 筛选控件事件（只绑一次）
+  if (!renderRecommended.bound) {
+    renderRecommended.bound = true;
+    $('#rec-search').oninput = () => {
+      recFilter.q = $('#rec-search').value;
+      renderRecommended();
+    };
+    for (const rowSel of ['#rec-filter-kind', '#rec-filter-src', '#rec-filter-state']) {
+      const row = document.querySelector(rowSel);
+      const key = rowSel.includes('kind') ? 'kind' : rowSel.includes('src') ? 'src' : 'state';
+      row.querySelectorAll('.chip').forEach((chip) => {
+        chip.onclick = () => {
+          row.querySelectorAll('.chip').forEach((c) => c.classList.remove('on'));
+          chip.classList.add('on');
+          recFilter[key] = chip.dataset.v;
+          renderRecommended();
+        };
+      });
+    }
+  }
 }
 
 // ---------- 记忆 Tab ----------
@@ -280,7 +339,7 @@ async function renderWallpaper() {
   if (radioMode) radioMode.checked = true;
   $('#wp-source').value = st.settings.source || '';
   $('#wp-interval').value = st.settings.interval || 60;
-  const op = Math.max(0, Math.min(90, Number(st.settings.opacity ?? 55)));
+  const op = Math.max(0, Math.min(100, Number(st.settings.opacity ?? 100)));
   $('#wp-opacity').value = String(op);
   $('#wp-opacity-val').textContent = String(op);
   $('#wp-opacity').oninput = async () => {
