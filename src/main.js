@@ -56,6 +56,35 @@ let appSettings = null;
 let activePlugins = new Map(); // id -> { mod, deactivate }
 let wpCssKeys = []; // 已注入的壁纸透明化 CSS key（guest 页面内）
 let wpTextMode = 'dark'; // 当前 DSH 文字颜色模式：'dark'=深色文字(亮壁纸) | 'light'=浅色文字(暗壁纸)
+let isQuitting = false; // 真正退出（托盘"退出"）时允许销毁窗口
+
+// —— 文件日志（正式版也可查）——
+let logFd = null;
+function logInit() {
+  try {
+    const dir = app.getPath('userData');
+    fs.mkdirSync(dir, { recursive: true });
+    logFd = fs.openSync(path.join(dir, 'app.log'), 'a');
+    console.log = (function (orig) {
+      return function (...args) {
+        orig(...args);
+        try {
+          if (logFd) fs.writeSync(logFd, `[${new Date().toISOString()}] ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`);
+        } catch {}
+      };
+    })(console.log);
+    console.warn = (function (orig) {
+      return function (...args) {
+        orig(...args);
+        try {
+          if (logFd) fs.writeSync(logFd, `[${new Date().toISOString()}][warn] ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`);
+        } catch {}
+      };
+    })(console.warn);
+  } catch (e) {
+    /* 日志失败不影响主功能 */
+  }
+}
 
 function userDataFile(name) {
   return path.join(app.getPath('userData'), name);
@@ -152,6 +181,14 @@ function createMainWindow() {
       webviewTag: true,
       preload: path.join(SRC_DIR, 'preload.js'),
     },
+  });
+  // 关闭按钮 → 隐藏到托盘（不销毁主窗口，保持 webview guest 常驻，QQ 桥接不断）
+  mainWindow.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault();
+      mainWindow.hide();
+      if (tray) tray.displayBalloon ? tray.displayBalloon('DSH Desktop', '已最小化到托盘，QQ 同步持续运行中') : new Notification({ title: 'DSH Desktop', body: '已最小化到托盘，QQ 同步持续运行中' }).show();
+    }
   });
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.webContents.on('did-finish-load', () => pushDshStatus());
@@ -843,6 +880,7 @@ function maybeInjectWatcherRemoval() {
 // ================= 启动 =================
 
 app.whenReady().then(async () => {
+  logInit();
   try {
     await boot();
     // Skill 开关 → 同步到 DSH skills 目录（~/.dsh/skills）
@@ -925,52 +963,93 @@ async function boot() {
     log: console,
   });
 
-  // QQ 同步桥：QQ 消息 → DSH 页面 → 回复回 QQ
+  // QQ 同步桥：QQ 消息 → headless DSH 引擎回复（快+可靠）→ 回复回 QQ
+  const { spawn } = require('child_process');
+  const DSH_BIN = path.join(app.getPath('home'), 'AppData', 'Roaming', 'npm', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+  function findNodeExe() {
+    const candidates = [
+      process.env.NODE_EXE,
+      'D:\\Program Files\\nodejs\\node.exe',
+      'C:\\Program Files\\nodejs\\node.exe',
+      path.join(process.env.APPDATA || '', 'npm', 'node.exe'),
+    ].filter(Boolean);
+    for (const c of candidates) {
+      try { if (fs.existsSync(c)) return c; } catch {}
+    }
+    return 'node'; // 最后 fallback：依赖 PATH
+  }
+  function askHeadless(text, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const nodeExe = findNodeExe();
+      const child = spawn(nodeExe, [DSH_BIN, '--profile', 'headless', text], {
+        windowsHide: true,
+        env: { ...process.env, DSH_HOME: process.env.DSH_HOME || path.join(app.getPath('home'), '.dsh') },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let out = '';
+      let err = '';
+      child.stdout.on('data', (d) => (out += d.toString()));
+      child.stderr.on('data', (d) => (err += d.toString()));
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error('headless 超时（' + Math.round(timeoutMs / 1000) + ' 秒）'));
+      }, timeoutMs);
+      child.on('error', (e) => {
+        clearTimeout(timer);
+        reject(new Error('headless 启动失败: ' + e.message));
+      });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        const clean = (out || '').replace(/\s+$/, '').trim();
+        if (clean) resolve(clean);
+        else reject(new Error('headless 无输出' + (err ? ': ' + err.slice(0, 100) : '')));
+      });
+    });
+  }
+  // 带重试的 headless 调用：超时/失败自动重试一次（headless 偶发启动慢）
+  function askHeadlessRetry(text) {
+    return askHeadless(text, 90000).catch((e) => {
+      console.log('[qq] headless 首次失败，重试: ' + e.message);
+      return askHeadless(text, 90000);
+    });
+  }
   const qqPending = []; // [{ text, resolve, timer }]
   qqBridge = new QQBridge({
     log: console,
     getSettings: () => appSettings.qq || {},
     onAsk: (text) =>
       new Promise((resolve, reject) => {
-        if (!guestContents || guestContents.isDestroyed()) {
-          reject(new Error('DSH 页面未就绪'));
-          return;
-        }
-        console.log('[qq] 转发给 DSH 页面: ' + text.slice(0, 60));
+        console.log('[qq] 发送给 headless 引擎: ' + text.slice(0, 60));
         const timer = setTimeout(() => {
           const i = qqPending.findIndex((p) => p.timer === timer);
           if (i >= 0) qqPending.splice(i, 1);
-          reject(new Error('DSH 回复超时（60 秒）'));
-        }, 60000);
+          reject(new Error('回复超时（90 秒）'));
+        }, 90000);
         qqPending.push({ text, resolve, timer });
-        try {
-          guestContents.send('qq:ask', text);
-          console.log('[qq] qq:ask 已发送到 guest');
-        } catch (e) {
-          console.log('[qq] qq:ask 发送失败: ' + e.message);
-          clearTimeout(timer);
-          reject(new Error('发送到 DSH 页面失败: ' + e.message));
-        }
+        askHeadlessRetry(text)
+          .then((reply) => {
+            console.log('[qq] headless 回复: ' + reply.slice(0, 60));
+            // 直接闭包 resolve（不依赖 qqPending.shift，避免竞态）
+            clearTimeout(timer);
+            const i = qqPending.findIndex((p) => p.timer === timer);
+            if (i >= 0) qqPending.splice(i, 1);
+            resolve(reply);
+          })
+          .catch((e) => {
+            console.log('[qq] headless 失败: ' + e.message);
+            clearTimeout(timer);
+            const i = qqPending.findIndex((p) => p.timer === timer);
+            if (i >= 0) qqPending.splice(i, 1);
+            reject(e);
+          });
       }),
   });
-  // preload → 主进程：DSH 页面回复
+  // preload → 主进程：DSH 页面回复（headless 模式下忽略，避免与 headless 竞争误报）
   ipcMain.on('qq:answer', (_e, reply) => {
-    console.log('[qq] DSH 回复到达: ' + String(reply || '').slice(0, 60));
-    const p = qqPending.shift();
-    if (p) {
-      clearTimeout(p.timer);
-      p.resolve(reply);
-    } else {
-      console.log('[qq] 无 pending 请求，回复丢弃');
-    }
+    console.log('[qq] 页面轮询回复（headless 模式忽略）: ' + String(reply || '').slice(0, 40));
   });
   ipcMain.on('qq:answer-error', (_e, err) => {
-    console.log('[qq] DSH 回复错误: ' + err);
-    const p = qqPending.shift();
-    if (p) {
-      clearTimeout(p.timer);
-      p.reject(new Error(err || 'DSH 回复失败'));
-    }
+    console.log('[qq] 页面错误（headless 模式忽略）: ' + err);
   });
   ipcMain.on('qq:debug', (_e, msg) => {
     console.log('[qq:debug] ' + msg);
@@ -1015,6 +1094,7 @@ app.on('second-instance', () => {
 });
 
 app.on('before-quit', () => {
+  isQuitting = true;
   deactivatePlugins();
 });
 
