@@ -1014,21 +1014,54 @@ async function boot() {
     });
   }
   const qqPending = []; // [{ text, resolve, timer }]
+  const qqContext = []; // 连续对话上下文 [{ user, ai }]，最多保留 10 轮
+  const NEW_CHAT_RE = /^(创建|新建|开始|开个)?(新的?)?(对话|会话|聊天)|^(重置|清空|清除)(对话|会话|聊天|上下文)?|重新开始/i;
+  function buildPrompt(text) {
+    // 检查是否要新建对话
+    if (NEW_CHAT_RE.test(text.trim())) {
+      qqContext.length = 0;
+      console.log('[qq] 检测到"新建对话"，已清空上下文');
+      return text;
+    }
+    if (!qqContext.length) return text;
+    // 拼接最近对话历史（压缩：每条只留关键内容）
+    const lines = ['以下是之前的对话（供你记住上下文）：'];
+    for (const t of qqContext) {
+      lines.push('用户: ' + String(t.user).slice(0, 300));
+      lines.push('助手: ' + String(t.ai).slice(0, 300));
+    }
+    lines.push('');
+    lines.push('新消息: ' + text);
+    lines.push('请基于以上上下文回答新消息。');
+    return lines.join('\n');
+  }
   qqBridge = new QQBridge({
     log: console,
     getSettings: () => appSettings.qq || {},
     onAsk: (text) =>
       new Promise((resolve, reject) => {
-        console.log('[qq] 发送给 headless 引擎: ' + text.slice(0, 60));
+        const prompt = buildPrompt(text);
+        // 纯"新建对话"指令：不调 headless，直接确认
+        if (NEW_CHAT_RE.test(text.trim())) {
+          console.log('[qq] 新建对话指令，直接确认');
+          resolve('已为你创建新的对话 ✅ 现在开始全新的对话（之前的内容已清空）。有什么想聊的？');
+          return;
+        }
+        console.log('[qq] 发送给 headless 引擎: ' + text.slice(0, 60) + (qqContext.length ? `（上下文 ${qqContext.length} 轮）` : ''));
         const timer = setTimeout(() => {
           const i = qqPending.findIndex((p) => p.timer === timer);
           if (i >= 0) qqPending.splice(i, 1);
           reject(new Error('回复超时（90 秒）'));
         }, 90000);
         qqPending.push({ text, resolve, timer });
-        askHeadlessRetry(text)
+        askHeadlessRetry(prompt)
           .then((reply) => {
             console.log('[qq] headless 回复: ' + reply.slice(0, 60));
+            // 记录上下文（除非是"新建对话"指令本身）
+            if (!NEW_CHAT_RE.test(text.trim())) {
+              qqContext.push({ user: text, ai: reply });
+              if (qqContext.length > 10) qqContext.shift();
+            }
             // 直接闭包 resolve（不依赖 qqPending.shift，避免竞态）
             clearTimeout(timer);
             const i = qqPending.findIndex((p) => p.timer === timer);
