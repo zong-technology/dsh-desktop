@@ -936,29 +936,44 @@ async function boot() {
           reject(new Error('DSH 页面未就绪'));
           return;
         }
+        console.log('[qq] 转发给 DSH 页面: ' + text.slice(0, 60));
         const timer = setTimeout(() => {
           const i = qqPending.findIndex((p) => p.timer === timer);
           if (i >= 0) qqPending.splice(i, 1);
-          reject(new Error('DSH 回复超时（10 秒）'));
-        }, 10000);
+          reject(new Error('DSH 回复超时（60 秒）'));
+        }, 60000);
         qqPending.push({ text, resolve, timer });
-        guestContents.send('qq:ask', text);
+        try {
+          guestContents.send('qq:ask', text);
+          console.log('[qq] qq:ask 已发送到 guest');
+        } catch (e) {
+          console.log('[qq] qq:ask 发送失败: ' + e.message);
+          clearTimeout(timer);
+          reject(new Error('发送到 DSH 页面失败: ' + e.message));
+        }
       }),
   });
   // preload → 主进程：DSH 页面回复
   ipcMain.on('qq:answer', (_e, reply) => {
+    console.log('[qq] DSH 回复到达: ' + String(reply || '').slice(0, 60));
     const p = qqPending.shift();
     if (p) {
       clearTimeout(p.timer);
       p.resolve(reply);
+    } else {
+      console.log('[qq] 无 pending 请求，回复丢弃');
     }
   });
   ipcMain.on('qq:answer-error', (_e, err) => {
+    console.log('[qq] DSH 回复错误: ' + err);
     const p = qqPending.shift();
     if (p) {
       clearTimeout(p.timer);
       p.reject(new Error(err || 'DSH 回复失败'));
     }
+  });
+  ipcMain.on('qq:debug', (_e, msg) => {
+    console.log('[qq:debug] ' + msg);
   });
   if (appSettings.qq) qqBridge.sync();
 
