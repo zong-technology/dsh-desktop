@@ -111,6 +111,7 @@ class QQBridge {
     Promise.resolve()
       .then(() => this.onAsk(prompt, { userId, groupId }))
       .then((reply) => {
+        this.log.log?.(`[qq] onAsk 返回: ${String(reply || '').slice(0, 40)}`);
         if (reply) {
           this.sendPrivate(userId, reply);
           if (groupId) this.sendGroup(groupId, reply);
@@ -158,7 +159,10 @@ class QQBridge {
         signal: AbortSignal.timeout(10000),
       });
       const data = await res.json().catch(() => ({}));
-      if (data && data.status === 'ok') return true;
+      if (data && data.status === 'ok') {
+        this.log.log?.(`[qq] ${action} → ok (msg_id=${data.data && data.data.message_id})`);
+        return true;
+      }
       this.log.warn?.(`[qq] ${action} 返回: ${JSON.stringify(data).slice(0, 120)}`);
       return false;
     } catch (e) {
