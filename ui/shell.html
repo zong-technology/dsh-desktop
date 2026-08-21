@@ -31,6 +31,12 @@
   .titlebar .app-icon { width: 18px; height: 18px; border-radius: 4px; margin-right: 8px; }
   .titlebar .title { font-size: 12.5px; color: var(--muted); font-weight: 600; letter-spacing: .3px; }
   .titlebar .win-controls { margin-left: auto; display: flex; height: 100%; -webkit-app-region: no-drag; }
+  .titlebar .btn-side-toggle {
+    width: 40px; height: 100%; border: none; background: transparent; color: var(--muted);
+    font-size: 15px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    border-left: 1px solid rgba(79,140,255,.15); transition: color .15s;
+  }
+  .titlebar .btn-side-toggle:hover { color: var(--accent); background: rgba(79,140,255,.1); }
   .titlebar .win-controls button {
     width: 46px; height: 100%; border: none; background: transparent; color: var(--text);
     font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center;
@@ -53,8 +59,15 @@
   #content { flex: 1; display: flex; overflow: hidden; position: relative; }
 
   /* ===== 左侧功能边栏 ===== */
-  .side { width: 252px; flex-shrink: 0; background: rgba(16,19,26,.66); border-right: 1px solid var(--border); display: flex; flex-direction: column; z-index: 30; position: relative; }
-  .side:hover { background: rgba(16,19,26,.78); }
+  /* 默认（壁纸关闭）：完全不透明原色，保证可读 */
+  /* 宽度 = 窗口 20%（对话区占 80%），最小 190px */
+  .side { width: 20%; min-width: 190px; max-width: 340px; flex-shrink: 0; background: rgba(16,19,26,.97); border-right: 1px solid var(--border); display: flex; flex-direction: column; z-index: 30; position: relative; transition: margin-left .18s ease, width .18s ease; }
+  /* 折叠状态：左侧栏宽度归零（彻底释放空间，stage 占满），同时透明隐藏 */
+  body.side-collapsed .side { width: 0; min-width: 0; max-width: 0; margin-left: 0; overflow: hidden; border-right: none; opacity: 0; pointer-events: none; }
+  body.side-collapsed .titlebar .btn-side-toggle .ic-fold { display: none; }
+  /* 壁纸开启（body.wp-on）：半透明，透出壁纸 */
+  body.wp-on .side { background: rgba(16,19,26,.66); }
+  body.wp-on .side:hover { background: rgba(16,19,26,.78); }
   .brand { display: flex; align-items: center; gap: 8px; padding: 14px 14px 10px; }
   .brand img { width: 22px; height: 22px; border-radius: 5px; }
   .brand .name { font-weight: 700; font-size: 13.5px; }
@@ -126,6 +139,9 @@
     <img class="app-icon" src="assets/icon.png" alt="">
     <span class="title">DSH Desktop — DeepSeek Harness 桌面客户端</span>
     <div class="win-controls">
+      <button class="btn-side-toggle" id="btn-side-toggle" title="隐藏/显示左侧栏">
+        <span class="ic-fold">▸</span><span class="ic-unfold" style="display:none">◂</span>
+      </button>
       <button class="wc-min" id="btn-min" title="最小化">
         <svg viewBox="0 0 12 12"><rect x="0" y="5.5" width="12" height="1.2" rx="0.6"/></svg>
       </button>
