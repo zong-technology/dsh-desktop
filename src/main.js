@@ -1034,6 +1034,7 @@ async function boot() {
         const SOFT_TIMEOUT_MS = 60000;
         const HARD_TIMEOUT_MS = 600000; // 10 分钟硬上限
         let finished = false;
+        let streamedAny = false; // 是否已流式推送过内容（避免重复发完整回复）
         const timer = setTimeout(() => {
           const i = qqPending.findIndex((p) => p.timer === timer);
           if (i >= 0) qqPending.splice(i, 1);
@@ -1046,8 +1047,13 @@ async function boot() {
           send('⏳ 任务已超过 10 分钟仍未完成，可能卡住了。你可以在电脑端 GUI 里查看进度，或发「新建对话」重置。');
         }, HARD_TIMEOUT_MS);
         qqPending.push({ text, resolve, timer });
-        // 进度报告（每 5 分钟 + 工具调用变化时）→ 转发到 QQ
+        // 流式推送（onChunk）+ 进度报告（onProgress）→ 转发到 QQ
         qqGuiSend(text, {
+          onChunk: (chunk, isFinal) => {
+            streamedAny = true;
+            console.log('[qq] 流式: ' + String(chunk || '').slice(0, 40) + (isFinal ? ' [尾]' : ''));
+            if (chunk) send(String(chunk));
+          },
           onProgress: (phase) => {
             console.log('[qq] 进度: ' + phase);
             send('⏳ ' + phase + '（完成后通知你）');
@@ -1062,7 +1068,8 @@ async function boot() {
               // 软超时已回复 pending —— 这里补发最终结果
               if (r.ok) {
                 console.log('[qq] GUI 最终回复(补发): ' + String(r.text || '').slice(0, 60));
-                send('✅ ' + r.text);
+                if (!streamedAny) send('✅ ' + r.text);
+                else send('✅ (已完成，内容已实时发送)');
               } else {
                 console.log('[qq] GUI 最终失败(补发): ' + r.error);
                 send('⚠️ ' + (r.error || 'GUI 无回复'));
@@ -1071,7 +1078,9 @@ async function boot() {
             }
             if (r.ok) {
               console.log('[qq] GUI 回复: ' + String(r.text || '').slice(0, 60));
-              resolve(r.text);
+              // 流式推送过 → 不再发完整回复（避免重复）；否则发完整
+              if (streamedAny) resolve({ type: 'pending', message: '' }); // 已完成，无需再发
+              else resolve(r.text);
             } else {
               console.log('[qq] GUI 回复失败: ' + r.error);
               if (r.error && r.error.includes('正忙')) {
