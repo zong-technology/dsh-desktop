@@ -18,6 +18,7 @@
     <button data-tab="recommended">🛒 插件市场</button>
     <button data-tab="memory">🧠 记忆</button>
     <button data-tab="wallpaper">🎨 壁纸</button>
+    <button data-tab="mcp">🔌 MCP</button>
     <button data-tab="qq">💬 QQ 同步</button>
     <button data-tab="about">ℹ️ 关于</button>
   </nav>
@@ -159,6 +160,74 @@
         <span id="wp-opacity-val" style="width:38px;text-align:right;color:var(--text)">100</span>
       </div>
       <div id="wp-state" class="metric"></div>
+    </div>
+  </section>
+
+  <!-- ============ MCP ============ -->
+  <section id="tab-mcp" class="tab">
+    <div class="card">
+      <h3>🔌 MCP 服务器（Model Context Protocol）</h3>
+      <p class="hint">
+        为 DSH 配置 <b>MCP 服务器</b>，AI 就能调用外部工具（文件系统、数据库、浏览器、网页抓取等）。
+        配置写入 <code>~/.dsh/profiles/web/cordis.patch.yml</code>，<b style="color:var(--yellow)">需要重启 DSH web (3080) 后生效</b>。
+        工具命名：<code>mcp__服务器名__工具名</code>，GUI 和 QQ 对话都能直接用。
+      </p>
+      <div class="rec-filters">
+        <div class="row" style="margin-bottom:6px">
+          <label class="switch-onoff">
+            <span style="color:var(--muted);margin-right:8px">修改状态</span>
+            <span id="mcp-status" class="badge">待应用</span>
+          </label>
+          <button id="mcp-refresh" style="margin-left:10px">刷新</button>
+          <button id="mcp-apply" class="primary" style="margin-left:auto">已改完，重启 DSH 生效</button>
+        </div>
+        <div id="mcp-tip" class="hint" style="color:var(--yellow)"></div>
+      </div>
+      <h3 style="margin-top:8px">已配置服务器 <span id="mcp-count" class="badge">0</span></h3>
+      <div id="mcp-list" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card">
+      <h3>➕ 添加 MCP 服务器</h3>
+      <div class="form-grid">
+        <div class="form-item">
+          <label>服务器名称（唯一，如 filesystem / github / playwright）</label>
+          <input type="text" id="mcp-name" placeholder="filesystem" spellcheck="false">
+        </div>
+        <div class="form-item">
+          <label>传输方式</label>
+          <select id="mcp-transport">
+            <option value="stdio">stdio（本地命令）</option>
+            <option value="http">streamable-http（远程 URL）</option>
+          </select>
+        </div>
+        <div class="form-item" id="mcp-row-command">
+          <label>启动命令</label>
+          <input type="text" id="mcp-command" placeholder="npx" value="npx" spellcheck="false">
+        </div>
+        <div class="form-item" id="mcp-row-args">
+          <label>参数（空格分隔，如 -y @modelcontextprotocol/server-filesystem D:\数据）</label>
+          <input type="text" id="mcp-args" placeholder="-y @modelcontextprotocol/server-filesystem D:\数据" spellcheck="false">
+        </div>
+        <div class="form-item" id="mcp-row-url" style="display:none">
+          <label>服务器 URL</label>
+          <input type="text" id="mcp-url" placeholder="https://api.example.com/mcp" spellcheck="false">
+        </div>
+        <div class="form-item" style="grid-column:1/-1">
+          <label>工具调用超时（毫秒，默认 300000）</label>
+          <input type="number" id="mcp-timeout" value="300000" min="1000" style="width:160px;padding:6px 8px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="mcp-add" class="primary">添加服务器</button>
+        <span id="mcp-add-result" class="result" style="margin-left:10px"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>🔥 GitHub 热门 MCP 推荐 <span id="mcp-rec-source" class="badge"></span> <span id="mcp-rec-count" class="badge blue"></span></h3>
+      <p class="hint">按 star 实时搜索 <code>topic:mcp</code> 的 GitHub 仓库（无需维护固定列表）。点击「添加」按推荐配置接入。</p>
+      <div id="mcp-rec-list"></div>
     </div>
   </section>
 
