@@ -107,15 +107,24 @@ class QQBridge {
     const userId = ev.user_id;
     const groupId = ev.group_id || null;
     this.log.log?.(`[qq] 收到私聊 ${userId}: ${prompt.slice(0, 60)}`);
+    // 给 onAsk 提供 send 回调：后台任务完成后可主动补发消息
+    const send = (msg) => {
+      if (!msg) return;
+      this.sendPrivate(userId, msg);
+      if (groupId) this.sendGroup(groupId, msg);
+    };
     // 异步处理：回复通过 onAsk 回调返回
     Promise.resolve()
-      .then(() => this.onAsk(prompt, { userId, groupId }))
+      .then(() => this.onAsk(prompt, { userId, groupId, send }))
       .then((reply) => {
-        this.log.log?.(`[qq] onAsk 返回: ${String(reply || '').slice(0, 40)}`);
-        if (reply) {
-          this.sendPrivate(userId, reply);
-          if (groupId) this.sendGroup(groupId, reply);
+        // onAsk 返回 { type: 'pending', message } = 任务仍在后台处理，稍后通过 send 发结果
+        if (reply && reply.type === 'pending') {
+          this.log.log?.(`[qq] onAsk 挂起: ${reply.message}`);
+          if (reply.message) send(reply.message);
+          return;
         }
+        this.log.log?.(`[qq] onAsk 返回: ${String(reply || '').slice(0, 40)}`);
+        if (reply) send(reply);
       })
       .catch((e) => {
         this.log.warn?.(`[qq] 对话失败: ${e.message}`);
