@@ -115,15 +115,20 @@ function esc(s) {
 let recFilter = { q: '', kind: 'all', src: 'all', state: 'all' };
 
 async function renderRecommended() {
-  const r = await api.invoke('registry:recommended');
-  recommended = r;
-  $('#rec-source').textContent = r.source === 'remote' ? 'GitHub' : '本地';
-  $('#rec-source').className = 'badge ' + (r.source === 'remote' ? 'green' : '');
-
   const container = $('#rec-list');
+  if (container) container.innerHTML = '<div style="padding:20px;color:var(--muted)">加载中…</div>';
+  const r = await api.invoke('registry:recommended').catch(() => ({ source: 'local', items: [] }));
+  recommended = r || { items: [] };
+  const srcEl = $('#rec-source');
+  if (srcEl) {
+    srcEl.textContent = r.source === 'remote' ? 'GitHub' : '本地';
+    srcEl.className = 'badge ' + (r.source === 'remote' ? 'green' : '');
+  }
+  if (!container) return;
   container.innerHTML = '';
-  const all = r.items || [];
-  $('#rec-count').textContent = `${all.length} 个`;
+  const all = recommended.items || [];
+  const cntEl = $('#rec-count');
+  if (cntEl) cntEl.textContent = `${all.length} 个`;
 
   // —— 过滤 ——
   const q = recFilter.q.trim().toLowerCase();
@@ -467,8 +472,112 @@ async function refreshAll() {
   await renderRecommended();
   await renderMemory();
   await renderWallpaper();
+  await renderMCP();
   await renderQQ();
   await renderAbout();
+}
+
+// ---------- MCP Tab ----------
+
+let mcpServers = [];
+
+function mcpEscapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function renderMCP() {
+  mcpServers = await api.invoke('mcp:list').catch(() => []);
+  $('#mcp-count').textContent = mcpServers.length;
+  const box = $('#mcp-list');
+  box.innerHTML = '';
+  if (!mcpServers.length) {
+    box.innerHTML = '<p class="hint">尚未配置 MCP 服务器。在上方添加，或从「GitHub 热门 MCP 推荐」一键接入。</p>';
+  }
+  for (const s of mcpServers) {
+    const row = document.createElement('div');
+    row.className = 'plugin-row';
+    row.dataset.id = s.id;
+    const args = (s.args || []).join(' ');
+    const cmd = s.transport === 'stdio'
+      ? mcpEscapeHtml(`${s.command || 'npx'} ${args}`.trim())
+      : mcpEscapeHtml(s.url || '');
+    row.innerHTML = `
+      <div style="flex:1;min-width:0">
+        <div class="plugin-name">
+          <span class="plugin-title">${mcpEscapeHtml(s.serverName)}</span>
+          <span class="badge ${s.transport === 'stdio' ? '' : 'blue'}">${s.transport === 'stdio' ? 'stdio' : 'HTTP'}</span>
+          <span class="badge ${s.enabled ? 'green' : 'gray'}">${s.enabled ? '启用' : '停用'}</span>
+        </div>
+        <div class="plugin-desc" style="color:var(--muted);font-size:12px;word-break:break-all">
+          ${cmd || '（无命令）'}
+          <span style="color:var(--muted2)">· 工具名 mcp__${mcpEscapeHtml(s.serverName)}__*</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="mini" data-act="toggle">${s.enabled ? '停用' : '启用'}</button>
+        <button class="mini danger" data-act="remove">删除</button>
+      </div>`;
+    row.querySelector('[data-act=toggle]').onclick = async () => {
+      await api.invoke('mcp:toggle', s.id, !s.enabled);
+      toast(s.enabled ? '已停用，重启 DSH 生效' : '已启用，重启 DSH 生效', 'ok');
+      await renderMCP();
+    };
+    row.querySelector('[data-act=remove]').onclick = async () => {
+      const r = await api.invoke('mcp:remove', s.id);
+      r.ok ? toast('已删除', 'ok') : toast('删除失败: ' + r.error, 'err');
+      await renderMCP();
+    };
+    box.appendChild(row);
+  }
+}
+
+async function loadMcpRecommended() {
+  const box = $('#mcp-rec-list');
+  box.innerHTML = '<p class="hint">正在从 GitHub 搜索热门 MCP 仓库…</p>';
+  $('#mcp-rec-source').textContent = 'GitHub';
+  const items = await api.invoke('mcp:recommended').catch(() => []);
+  $('#mcp-rec-count').textContent = items.length;
+  box.innerHTML = '';
+  if (!items.length) {
+    box.innerHTML = '<p class="hint">未获取到推荐（网络不可用？）。可手动添加 MCP 服务器。</p>';
+    return;
+  }
+  for (const it of items) {
+    const row = document.createElement('div');
+    row.className = 'plugin-row';
+    row.innerHTML = `
+      <div style="flex:1;min-width:0">
+        <div class="plugin-name">
+          <span class="plugin-title">${mcpEscapeHtml(it.name)}</span>
+          <span class="badge">⭐ ${it.stars}</span>
+        </div>
+        <div class="plugin-desc" style="color:var(--muted);font-size:12px;word-break:break-all">
+          ${mcpEscapeHtml(it.description || '')}
+        </div>
+      </div>
+      <button class="mini primary" data-act="add">添加</button>`;
+    row.querySelector('[data-act=add]').onclick = async () => {
+      // 按仓库名生成默认 stdio 配置（npx 运行，参数见 README）
+      const name = it.name.replace(/[-_](mcp|server)$/i, '').toLowerCase() || it.name.toLowerCase();
+      const pkg = it.fullName.startsWith('modelcontextprotocol/')
+        ? '@modelcontextprotocol/server-' + it.name.replace(/^server-/, '')
+        : 'github:' + it.fullName;
+      const spec = {
+        serverName: name,
+        transport: 'stdio',
+        command: 'npx',
+        args: ['-y', pkg],
+      };
+      const r = await api.invoke('mcp:add', spec);
+      if (r.ok) {
+        toast(`已添加 ${name}（重启 DSH 后生效）`, 'ok');
+        await renderMCP();
+      } else {
+        toast('添加失败: ' + r.error, 'err');
+      }
+    };
+    box.appendChild(row);
+  }
 }
 
 // ---------- QQ 同步 Tab ----------
@@ -492,6 +601,56 @@ async function renderQQ() {
 
 async function init() {
   document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => tab(b.dataset.tab)));
+
+  // ---- MCP Tab ----
+  $('#mcp-transport').onchange = () => {
+    const isHttp = $('#mcp-transport').value !== 'stdio';
+    $('#mcp-row-command').style.display = isHttp ? 'none' : '';
+    $('#mcp-row-args').style.display = isHttp ? 'none' : '';
+    $('#mcp-row-url').style.display = isHttp ? '' : 'none';
+  };
+  $('#mcp-add').onclick = async () => {
+    const name = $('#mcp-name').value.trim();
+    if (!name) { toast('请填写服务器名称', 'err'); return; }
+    const isHttp = $('#mcp-transport').value !== 'stdio';
+    const args = $('#mcp-args').value.trim().split(/\s+/).filter(Boolean);
+    const spec = {
+      serverName: name,
+      transport: isHttp ? 'http' : 'stdio',
+      command: isHttp ? '' : ($('#mcp-command').value.trim() || 'npx'),
+      args: isHttp ? [] : args,
+      url: isHttp ? $('#mcp-url').value.trim() : '',
+      toolCallTimeoutMs: Number($('#mcp-timeout').value) || 300000,
+    };
+    const r = await api.invoke('mcp:add', spec);
+    const box = $('#mcp-add-result');
+    if (r.ok) {
+      box.className = 'result ok';
+      box.textContent = `✅ 已添加 ${name}，重启 DSH 后生效`;
+      $('#mcp-name').value = '';
+      $('#mcp-args').value = '';
+      await renderMCP();
+    } else {
+      box.className = 'result err';
+      box.textContent = '❌ ' + r.error;
+    }
+  };
+  $('#mcp-refresh').onclick = async () => {
+    await renderMCP();
+    $('#mcp-status').textContent = '已刷新';
+  };
+  $('#mcp-apply').onclick = async () => {
+    const r = await api.invoke('mcp:apply');
+    if (r.ok) {
+      $('#mcp-tip').textContent = r.restartHint;
+      $('#mcp-status').textContent = '等待重启';
+      toast('配置已写入，请重启 DSH web 生效', 'ok');
+    }
+  };
+  $('#mcp-name').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') $('#mcp-add').click();
+  });
+  loadMcpRecommended();
 
   $('#btn-install').onclick = () => {
     const spec = $('#install-spec').value.trim();
@@ -601,8 +760,5 @@ async function init() {
     if (stepLog.length > 40) stepLog = stepLog.slice(-40);
     renderSteps();
   });
-
-  await refreshAll();
-}
 
 init();
