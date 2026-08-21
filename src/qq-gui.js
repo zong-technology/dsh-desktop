@@ -105,8 +105,9 @@ function contentHasText(events, needle) {
 /**
  * 发送消息到 GUI 会话并等待回复。
  * @param {string} text - 用户消息
- * @param {object} opts - { cwdHints: string[], baseSessionId?: string, onStatus?: (s: string)=>void }
- * @returns {Promise<{ ok: boolean, text?: string, sessionId?: string, error?: string }>}
+ * @param {object} opts - { cwdHints, baseSessionId, onStatus, onProgress, onChunk }
+ *   onChunk(chunk, isFinal) - 流式推送：AI 新产出的文本增量（按语义块），isFinal=true 表示最后一段
+ * @returns {Promise<{ ok, text, sessionId, error }>}
  */
 async function sendToGuiSession(text, opts = {}) {
   const log = opts.log || console;
@@ -136,6 +137,48 @@ async function sendToGuiSession(text, opts = {}) {
       clientTimeZone: 'Asia/Shanghai',
     });
     log.log?.(`[qq-gui] 已发送到 GUI 会话 (queue)`);
+
+    // ===== 流式推送：维护已推送游标（按字符数，防重复）=====
+    let pushedLen = 0; // 已推送的 watcherTurn 文本长度
+    let pendingChunk = ''; // 待推送的积累文本
+    const CHUNK_MAX = 60; // 单块最大字符（超过即强制分块）
+    const SEMI_BOUNDARY = /[。！？!?；;\n]/; // 语义边界（句号/感叹/问号/分号/换行）
+    // 尝试推送当前积累块（满足边界或长度或 final）
+    const flushChunk = (fullText, isFinal) => {
+      if (!opts.onChunk || !pendingChunk) return;
+      const chunk = pendingChunk.trim();
+      pendingChunk = '';
+      if (chunk) {
+        log.log?.(`[qq-gui] 流式推送${isFinal ? '(尾)' : ''}: ${chunk.slice(0, 40)}…`);
+        try { opts.onChunk(chunk, isFinal); } catch {}
+      }
+    };
+    const considerChunk = (fullText, isFinal) => {
+      if (!opts.onChunk || !fullText) return;
+      const newPart = fullText.slice(pushedLen);
+      if (!newPart) return;
+      pendingChunk += newPart;
+      pushedLen = fullText.length;
+      // 语义边界分块：在边界后截断推送
+      let cut = -1;
+      for (let i = 0; i < pendingChunk.length; i++) {
+        if (SEMI_BOUNDARY.test(pendingChunk[i])) cut = i + 1;
+      }
+      if (cut > 0 || pendingChunk.length >= CHUNK_MAX || isFinal) {
+        // 若有边界 → 推送到最后边界；无边界但超长 → 整块推；final → 全推
+        if (cut > 0) {
+          const head = pendingChunk.slice(0, cut);
+          pendingChunk = pendingChunk.slice(cut);
+          const chunk = head.trim();
+          if (chunk) {
+            log.log?.(`[qq-gui] 流式推送: ${chunk.slice(0, 40)}…`);
+            try { opts.onChunk(chunk, false); } catch {}
+          }
+        } else {
+          flushChunk(fullText, isFinal);
+        }
+      }
+    };
 
     // 等待：新 turn 完成 且 回复文本非空
     const deadline = Date.now() + PROMPT_TIMEOUT_MS;
@@ -205,7 +248,7 @@ async function sendToGuiSession(text, opts = {}) {
           log.log?.(`[qq-gui] 新 turn ${watcherTurn} 已开始`);
         }
       }
-      // 若已看到新 turn：等它 turn/end + 提取该 turn 文本
+      // 若已看到新 turn：等它 turn/end + 提取该 turn 文本（流式推送增量）
       if (sawNewTurn) {
         let done = false;
         const texts = [];
@@ -219,18 +262,30 @@ async function sendToGuiSession(text, opts = {}) {
             for (const p of parts) if (p.type === 'text') texts.push(p.text);
           }
         }
-        const reply = texts.join('').trim();
-        if (done && reply) return { ok: true, text: reply, sessionId };
-        if (done && !reply) {
+        const full = texts.join('');
+        // ★ 流式：把新出现的文本增量按语义块推送
+        considerChunk(full, false);
+        // 每轮 poll 后若积累超时也推一把（防止长时间无边界）
+        if (pendingChunk && pendingChunk.length >= 10) flushChunk(full, false);
+        const reply = full.trim();
+        if (done) {
+          // turn 结束：推送剩余尾巴（final）
+          considerChunk(full, true);
+          flushChunk(full, true);
+          if (reply) return { ok: true, text: reply, sessionId };
           // turn 结束但无文本（可能被取消/空回复）——继续等下一个新 turn
           sawNewTurn = false;
           watcherTurn = null;
+          pushedLen = 0;
+          pendingChunk = '';
         }
       } else if (Date.now() > deadline - 30000) {
         // 接近超时且从未开始新 turn：报告等待状态
         return { ok: false, error: 'GUI 会话当前正忙（消息已排队，等待轮到你）' };
       }
     }
+    // 最终超时：若还有未推完的文本，推送尾巴标记为 final
+    if (opts.onChunk && pendingChunk) flushChunk(pendingChunk, true);
     return { ok: false, error: '等待 GUI 回复超时' };
   } catch (e) {
     log.warn?.(`[qq-gui] 调用失败: ${e.message}`);
