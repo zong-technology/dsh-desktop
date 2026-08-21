@@ -62,7 +62,7 @@ class Registry {
     const gh = (url, token) =>
       fetch(url, {
         headers: { 'User-Agent': 'dsh-desktop', Accept: 'application/vnd.github+json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(5000),
       });
     try {
       // 1) 拿仓库默认分支 + 包目录树（一次性列出所有 package.json 路径）
@@ -132,7 +132,7 @@ class Registry {
           Accept: 'application/vnd.github+json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(5000),
       });
     const QUERIES = [
       'dsh- in:name sort:stars',
