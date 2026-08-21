@@ -56,35 +56,6 @@ let appSettings = null;
 let activePlugins = new Map(); // id -> { mod, deactivate }
 let wpCssKeys = []; // 已注入的壁纸透明化 CSS key（guest 页面内）
 let wpTextMode = 'dark'; // 当前 DSH 文字颜色模式：'dark'=深色文字(亮壁纸) | 'light'=浅色文字(暗壁纸)
-let isQuitting = false; // 真正退出（托盘"退出"）时允许销毁窗口
-
-// —— 文件日志（正式版也可查）——
-let logFd = null;
-function logInit() {
-  try {
-    const dir = app.getPath('userData');
-    fs.mkdirSync(dir, { recursive: true });
-    logFd = fs.openSync(path.join(dir, 'app.log'), 'a');
-    console.log = (function (orig) {
-      return function (...args) {
-        orig(...args);
-        try {
-          if (logFd) fs.writeSync(logFd, `[${new Date().toISOString()}] ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`);
-        } catch {}
-      };
-    })(console.log);
-    console.warn = (function (orig) {
-      return function (...args) {
-        orig(...args);
-        try {
-          if (logFd) fs.writeSync(logFd, `[${new Date().toISOString()}][warn] ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`);
-        } catch {}
-      };
-    })(console.warn);
-  } catch (e) {
-    /* 日志失败不影响主功能 */
-  }
-}
 
 function userDataFile(name) {
   return path.join(app.getPath('userData'), name);
@@ -181,14 +152,6 @@ function createMainWindow() {
       webviewTag: true,
       preload: path.join(SRC_DIR, 'preload.js'),
     },
-  });
-  // 关闭按钮 → 隐藏到托盘（不销毁主窗口，保持 webview guest 常驻，QQ 桥接不断）
-  mainWindow.on('close', (e) => {
-    if (!isQuitting) {
-      e.preventDefault();
-      mainWindow.hide();
-      if (tray) tray.displayBalloon ? tray.displayBalloon('DSH Desktop', '已最小化到托盘，QQ 同步持续运行中') : new Notification({ title: 'DSH Desktop', body: '已最小化到托盘，QQ 同步持续运行中' }).show();
-    }
   });
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.webContents.on('did-finish-load', () => pushDshStatus());
@@ -369,7 +332,8 @@ function applyGuestWallpaper() {
 
 /** 根据壁纸亮度切换文字颜色（shell 检测亮度后调用） */
 function setWallpaperTextMode(dark) {
-  const mode = dark ? 'light' : 'dark';
+  // dark=true 表示壁纸偏亮（近白，sum/n>210）→ 用深色文字；否则用浅色文字
+  const mode = dark ? 'dark' : 'light';
   if (mode === wpTextMode) return;
   wpTextMode = mode;
   if (!guestContents || guestContents.isDestroyed() || wpCssKeys.length === 0) return;
@@ -394,7 +358,9 @@ function createSettingsWindow() {
     minHeight: 600,
     title: 'DSH Desktop · 设置',
     icon: path.join(UI_DIR, 'assets', 'icon.png'),
-    parent: mainWindow || undefined,
+    // 独立窗口（不用 parent）：避免任何模态/禁用主窗口行为（功能窗口打不开的修复）
+    modal: false,
+    show: false, // 先隐藏，加载完成再显示（避免白屏）
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -403,6 +369,7 @@ function createSettingsWindow() {
     },
   });
   settingsWindow.loadFile(path.join(UI_DIR, 'index.html'));
+  settingsWindow.once('ready-to-show', () => settingsWindow.show());
   settingsWindow.on('closed', () => {
     settingsWindow = null;
   });
@@ -650,10 +617,14 @@ function registerIpc() {
   });
 
   ipcMain.handle('registry:recommended', async () => {
-    const r = await registry.getRecommended();
+    // 并行拉取：本地推荐 + GitHub 仓库市场 + GitHub 热门插件（避免串行卡顿）
+    const [r, market, found] = await Promise.all([
+      registry.getRecommended().catch(() => ({ items: [], source: 'local' })),
+      registry.fetchGithubMarket().catch(() => []),
+      registry.searchGithubPlugins().catch(() => []),
+    ]);
     // 合并 GitHub 仓库市场（dsh-web-ui 官方生态包）
     try {
-      const market = await registry.fetchGithubMarket();
       if (market.length) {
         const ids = new Set((r.items || []).map((i) => i.id));
         r.items = [...(r.items || []), ...market.filter((m) => !ids.has(m.id))];
@@ -663,7 +634,6 @@ function registerIpc() {
     }
     // 合并 GitHub 热门插件搜索（全部适配 DSH 的仓库，按 star 排序）
     try {
-      const found = await registry.searchGithubPlugins();
       if (found.length) {
         const ids = new Set((r.items || []).map((i) => i.id));
         r.items = [...(r.items || []), ...found.filter((m) => !ids.has(m.id))];
@@ -868,6 +838,47 @@ function registerIpc() {
     registry.remoteUrl = appSettings.registryUrl;
     return appSettings.registryUrl;
   });
+  // 侧边栏折叠状态（shell 页面持久化）
+  ipcMain.handle('ui:settings:get', () => ({
+    sidebarCollapsed: !!(appSettings.ui && appSettings.ui.sidebarCollapsed),
+  }));
+  ipcMain.handle('ui:settings:set', (_e, patch) => {
+    appSettings.ui = appSettings.ui || {};
+    if (typeof patch?.sidebarCollapsed === 'boolean') appSettings.ui.sidebarCollapsed = patch.sidebarCollapsed;
+    saveAppSettings();
+    return appSettings.ui;
+  });
+
+  // ===== MCP 管理 =====
+  ipcMain.handle('mcp:list', () => {
+    const mcp = require('./mcp-manager');
+    return mcp.listMcpServers();
+  });
+  ipcMain.handle('mcp:add', (_e, spec) => {
+    const mcp = require('./mcp-manager');
+    return mcp.addMcpServer(spec || {});
+  });
+  ipcMain.handle('mcp:remove', (_e, id) => {
+    const mcp = require('./mcp-manager');
+    return mcp.removeMcpServer(String(id || ''));
+  });
+  ipcMain.handle('mcp:toggle', (_e, id, enabled) => {
+    const mcp = require('./mcp-manager');
+    return mcp.toggleMcpServer(String(id || ''), !!enabled);
+  });
+  ipcMain.handle('mcp:recommended', async () => {
+    const mcp = require('./mcp-manager');
+    return mcp.fetchMcpRecommendations(20);
+  });
+  // 应用：提示重启 DSH web（浏览器方式告知用户，不自动重启——3080 由用户管理）
+  ipcMain.handle('mcp:apply', () => {
+    const mcp = require('./mcp-manager');
+    return {
+      ok: true,
+      patchFile: mcp.getPatchFile(),
+      restartHint: '配置已写入 cordis.patch.yml。请重启 DSH web (3080) 生效：关闭运行 DSH 的终端/任务后重新运行 dsh --profile web。重启后 MCP 工具（mcp__服务器名__工具名）在 GUI 与 QQ 对话中可用。',
+    };
+  });
 }
 
 function maybeInjectWatcherRemoval() {
@@ -880,7 +891,6 @@ function maybeInjectWatcherRemoval() {
 // ================= 启动 =================
 
 app.whenReady().then(async () => {
-  logInit();
   try {
     await boot();
     // Skill 开关 → 同步到 DSH skills 目录（~/.dsh/skills）
@@ -963,126 +973,135 @@ async function boot() {
     log: console,
   });
 
-  // QQ 同步桥：QQ 消息 → headless DSH 引擎回复（快+可靠）→ 回复回 QQ
-  const { spawn } = require('child_process');
-  const DSH_BIN = path.join(app.getPath('home'), 'AppData', 'Roaming', 'npm', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
-  function findNodeExe() {
-    const candidates = [
-      process.env.NODE_EXE,
-      'D:\\Program Files\\nodejs\\node.exe',
-      'C:\\Program Files\\nodejs\\node.exe',
-      path.join(process.env.APPDATA || '', 'npm', 'node.exe'),
-    ].filter(Boolean);
-    for (const c of candidates) {
-      try { if (fs.existsSync(c)) return c; } catch {}
-    }
-    return 'node'; // 最后 fallback：依赖 PATH
-  }
-  function askHeadless(text, timeoutMs) {
-    return new Promise((resolve, reject) => {
-      const nodeExe = findNodeExe();
-      const child = spawn(nodeExe, [DSH_BIN, '--profile', 'headless', text], {
-        windowsHide: true,
-        env: { ...process.env, DSH_HOME: process.env.DSH_HOME || path.join(app.getPath('home'), '.dsh') },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let out = '';
-      let err = '';
-      child.stdout.on('data', (d) => (out += d.toString()));
-      child.stderr.on('data', (d) => (err += d.toString()));
-      const timer = setTimeout(() => {
-        child.kill();
-        reject(new Error('headless 超时（' + Math.round(timeoutMs / 1000) + ' 秒）'));
-      }, timeoutMs);
-      child.on('error', (e) => {
-        clearTimeout(timer);
-        reject(new Error('headless 启动失败: ' + e.message));
-      });
-      child.on('close', (code) => {
-        clearTimeout(timer);
-        const clean = (out || '').replace(/\s+$/, '').trim();
-        if (clean) resolve(clean);
-        else reject(new Error('headless 无输出' + (err ? ': ' + err.slice(0, 100) : '')));
-      });
-    });
-  }
-  // 带重试的 headless 调用：超时/失败自动重试一次（headless 偶发启动慢）
-  function askHeadlessRetry(text) {
-    return askHeadless(text, 90000).catch((e) => {
-      console.log('[qq] headless 首次失败，重试: ' + e.message);
-      return askHeadless(text, 90000);
-    });
-  }
+  // QQ 同步桥：QQ 消息 → GUI 会话（DSH web 3080）→ 回复回 QQ
   const qqPending = []; // [{ text, resolve, timer }]
-  const qqContext = []; // 连续对话上下文 [{ user, ai }]，最多保留 10 轮
   const NEW_CHAT_RE = /^(创建|新建|开始|开个)?(新的?)?(对话|会话|聊天)|^(重置|清空|清除)(对话|会话|聊天|上下文)?|重新开始/i;
-  function buildPrompt(text) {
-    // 检查是否要新建对话
-    if (NEW_CHAT_RE.test(text.trim())) {
-      qqContext.length = 0;
-      console.log('[qq] 检测到"新建对话"，已清空上下文');
-      return text;
+  let qqGuiSessionId = null; // 缓存的 GUI 会话 id
+  const GUI_CWD_HINTS = [app.getPath('home') + '\\.dsh-hcwd', process.cwd()].filter(Boolean);
+  async function qqGuiSend(text, extra = {}) {
+    const { sendToGuiSession, findGuiSession } = require('./qq-gui');
+    if (!qqGuiSessionId) {
+      try {
+        const found = await findGuiSession(GUI_CWD_HINTS);
+        qqGuiSessionId = found?.sessionId || null;
+        console.log('[qq] GUI 会话: ' + qqGuiSessionId);
+      } catch (e) {
+        console.log('[qq] 查找 GUI 会话失败: ' + e.message);
+      }
     }
-    if (!qqContext.length) return text;
-    // 拼接最近对话历史（压缩：每条只留关键内容）
-    const lines = ['以下是之前的对话（供你记住上下文）：'];
-    for (const t of qqContext) {
-      lines.push('用户: ' + String(t.user).slice(0, 300));
-      lines.push('助手: ' + String(t.ai).slice(0, 300));
+    return sendToGuiSession(text, {
+      cwdHints: GUI_CWD_HINTS,
+      baseSessionId: qqGuiSessionId,
+      log: console,
+      ...(extra.onProgress ? { onProgress: extra.onProgress } : {}),
+    });
+  }
+  async function findGuiSessionSafe() {
+    const { findGuiSession } = require('./qq-gui');
+    const found = await findGuiSession(GUI_CWD_HINTS);
+    qqGuiSessionId = found?.sessionId || null;
+    return qqGuiSessionId;
+  }
+  async function qqGuiNewChat() {
+    const { rpc } = require('./qq-gui');
+    try {
+      const sid = qqGuiSessionId || (await findGuiSessionSafe());
+      if (!sid) return '检测到 DSH web 未运行，无法新建对话。';
+      const v = await rpc('session.fork', { sessionId: sid });
+      qqGuiSessionId = v.sessionId;
+      console.log('[qq] 新建对话（fork）→ ' + qqGuiSessionId);
+      return '已为你创建新的对话 ✅（GUI 会话已切换，从此处开始全新内容）。有什么想聊的？';
+    } catch (e) {
+      return '新建对话失败: ' + e.message;
     }
-    lines.push('');
-    lines.push('新消息: ' + text);
-    lines.push('请基于以上上下文回答新消息。');
-    return lines.join('\n');
   }
   qqBridge = new QQBridge({
     log: console,
     getSettings: () => appSettings.qq || {},
-    onAsk: (text) =>
+    onAsk: (text, ctx) =>
       new Promise((resolve, reject) => {
-        const prompt = buildPrompt(text);
-        // 纯"新建对话"指令：不调 headless，直接确认
+        const send = ctx?.send || (() => {});
+        // 纯"新建对话"指令：fork 新会话（真正的新对话，GUI 可见）
         if (NEW_CHAT_RE.test(text.trim())) {
-          console.log('[qq] 新建对话指令，直接确认');
-          resolve('已为你创建新的对话 ✅ 现在开始全新的对话（之前的内容已清空）。有什么想聊的？');
+          console.log('[qq] 新建对话指令，fork 新会话');
+          qqGuiNewChat()
+            .then(resolve)
+            .catch((e) => reject(new Error('新建对话失败: ' + e.message)));
           return;
         }
-        console.log('[qq] 发送给 headless 引擎: ' + text.slice(0, 60) + (qqContext.length ? `（上下文 ${qqContext.length} 轮）` : ''));
+        console.log('[qq] 发送到 GUI 会话: ' + text.slice(0, 60));
+        // 软超时：超过 60 秒先回"仍在处理"，后台继续等，完成后用 ctx.send 补发最终结果
+        const SOFT_TIMEOUT_MS = 60000;
+        const HARD_TIMEOUT_MS = 600000; // 10 分钟硬上限
+        let finished = false;
         const timer = setTimeout(() => {
           const i = qqPending.findIndex((p) => p.timer === timer);
           if (i >= 0) qqPending.splice(i, 1);
-          reject(new Error('回复超时（90 秒）'));
-        }, 90000);
+          console.log('[qq] 软超时（60 秒），转 pending');
+          finished = true;
+          resolve({ type: 'pending', message: '⏳ 正在处理中，可能需要一些时间（任务较长时请稍候）。完成后我会在这里告诉你结果。' });
+        }, SOFT_TIMEOUT_MS);
+        const hardTimer = setTimeout(() => {
+          finished = true;
+          send('⏳ 任务已超过 10 分钟仍未完成，可能卡住了。你可以在电脑端 GUI 里查看进度，或发「新建对话」重置。');
+        }, HARD_TIMEOUT_MS);
         qqPending.push({ text, resolve, timer });
-        askHeadlessRetry(prompt)
-          .then((reply) => {
-            console.log('[qq] headless 回复: ' + reply.slice(0, 60));
-            // 记录上下文（除非是"新建对话"指令本身）
-            if (!NEW_CHAT_RE.test(text.trim())) {
-              qqContext.push({ user: text, ai: reply });
-              if (qqContext.length > 10) qqContext.shift();
-            }
-            // 直接闭包 resolve（不依赖 qqPending.shift，避免竞态）
+        // 进度报告（每 5 分钟 + 工具调用变化时）→ 转发到 QQ
+        qqGuiSend(text, {
+          onProgress: (phase) => {
+            console.log('[qq] 进度: ' + phase);
+            send('⏳ ' + phase + '（完成后通知你）');
+          },
+        })
+          .then((r) => {
             clearTimeout(timer);
+            clearTimeout(hardTimer);
             const i = qqPending.findIndex((p) => p.timer === timer);
             if (i >= 0) qqPending.splice(i, 1);
-            resolve(reply);
+            if (finished) {
+              // 软超时已回复 pending —— 这里补发最终结果
+              if (r.ok) {
+                console.log('[qq] GUI 最终回复(补发): ' + String(r.text || '').slice(0, 60));
+                send('✅ ' + r.text);
+              } else {
+                console.log('[qq] GUI 最终失败(补发): ' + r.error);
+                send('⚠️ ' + (r.error || 'GUI 无回复'));
+              }
+              return;
+            }
+            if (r.ok) {
+              console.log('[qq] GUI 回复: ' + String(r.text || '').slice(0, 60));
+              resolve(r.text);
+            } else {
+              console.log('[qq] GUI 回复失败: ' + r.error);
+              if (r.error && r.error.includes('正忙')) {
+                finished = true;
+                resolve({ type: 'pending', message: '⏳ AI 当前正忙，你的消息已排队，稍后处理完会自动通知你。' });
+              } else {
+                reject(new Error(r.error || 'GUI 无回复'));
+              }
+            }
           })
           .catch((e) => {
-            console.log('[qq] headless 失败: ' + e.message);
+            console.log('[qq] GUI 调用失败: ' + e.message);
             clearTimeout(timer);
+            clearTimeout(hardTimer);
             const i = qqPending.findIndex((p) => p.timer === timer);
             if (i >= 0) qqPending.splice(i, 1);
+            if (finished) {
+              send('⚠️ ' + e.message);
+              return;
+            }
             reject(e);
           });
       }),
   });
-  // preload → 主进程：DSH 页面回复（headless 模式下忽略，避免与 headless 竞争误报）
+  // preload → 主进程：DSH 页面回复（GUI 桥接模式忽略，避免与 GUI 会话竞争误报）
   ipcMain.on('qq:answer', (_e, reply) => {
-    console.log('[qq] 页面轮询回复（headless 模式忽略）: ' + String(reply || '').slice(0, 40));
+    console.log('[qq] 页面轮询回复（GUI 桥接模式忽略）: ' + String(reply || '').slice(0, 40));
   });
   ipcMain.on('qq:answer-error', (_e, err) => {
-    console.log('[qq] 页面错误（headless 模式忽略）: ' + err);
+    console.log('[qq] 页面错误（GUI 桥接模式忽略）: ' + err);
   });
   ipcMain.on('qq:debug', (_e, msg) => {
     console.log('[qq:debug] ' + msg);
@@ -1127,7 +1146,6 @@ app.on('second-instance', () => {
 });
 
 app.on('before-quit', () => {
-  isQuitting = true;
   deactivatePlugins();
 });
 
