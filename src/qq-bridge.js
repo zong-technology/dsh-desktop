@@ -26,6 +26,7 @@ class QQBridge {
     this.onAsk = onAsk;
     this.server = null;
     this.started = false;
+    this._sendQueue = Promise.resolve(); // 消息发送串行队列（保证 QQ 消息顺序）
   }
 
   /** 设置变化时调用：enabled=true 启动监听，false 停止 */
@@ -107,11 +108,13 @@ class QQBridge {
     const userId = ev.user_id;
     const groupId = ev.group_id || null;
     this.log.log?.(`[qq] 收到私聊 ${userId}: ${prompt.slice(0, 60)}`);
-    // 给 onAsk 提供 send 回调：后台任务完成后可主动补发消息
+    // 给 onAsk 提供 send 回调：后台任务完成后可主动补发消息（串行队列保证 QQ 消息顺序）
     const send = (msg) => {
       if (!msg) return;
-      this.sendPrivate(userId, msg);
-      if (groupId) this.sendGroup(groupId, msg);
+      this._sendQueue = this._sendQueue.then(async () => {
+        await this.sendPrivate(userId, msg);
+        if (groupId) await this.sendGroup(groupId, msg);
+      }).catch((e) => this.log.warn?.(`[qq] 发送失败(队列): ${e.message}`));
     };
     // 异步处理：回复通过 onAsk 回调返回
     Promise.resolve()
