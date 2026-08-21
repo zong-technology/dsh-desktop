@@ -78,6 +78,7 @@ async function renderWallpaper() {
   const on = wpState && wpState.active && (wpState.type === 'video' || wpState.type === 'web' || wpState.type === 'dir') && wpState.source;
   const isWindowMode = !wpState || wpState.mode !== 'desktop'; // window 模式才在客户端渲染
   const visible = on && isWindowMode;
+  console.log('[wallpaper:render] state=' + JSON.stringify(wpState ? { active: wpState.active, type: wpState.type, mode: wpState.mode, source: wpState.source ? 'yes' : 'no' } : null) + ' visible=' + visible);
   $('#wp-badge').classList.toggle('show', !!visible);
   setSwitch($('#sw-wallpaper'), !!wpState?.active);
 
@@ -105,8 +106,9 @@ async function renderWallpaper() {
     f.allow = 'autoplay';
     bg.appendChild(f);
   } else if (wpState.type === 'dir') {
-    // 目录壁纸：自动轮换
+    // 目录壁纸：自动轮换（视频+图片都支持；每次只加载一个媒体，内存可控）
     const scan = await api.invoke('wallpaper:files', wpState.source).catch(() => ({ videos: [], images: [] }));
+    console.log('[wallpaper:render] scan=' + JSON.stringify({ images: (scan.images || []).length, videos: (scan.videos || []).length }));
     wpFiles = [...(scan.images || []), ...(scan.videos || [])];
     if (!wpFiles.length) {
       bg.className = 'bg off';
@@ -116,9 +118,12 @@ async function renderWallpaper() {
     box.id = 'wp-media-box';
     bg.appendChild(box);
     const interval = Math.max(5, Number(wpState.interval) || 60) * 1000;
+    let wpIndex = 0;
     const show = (i) => {
-      const u = wpFiles[i % wpFiles.length];
-      box.innerHTML = '';
+      if (!wpFiles.length) return;
+      wpIndex = ((i % wpFiles.length) + wpFiles.length) % wpFiles.length;
+      const u = wpFiles[wpIndex];
+      box.innerHTML = ''; // 每次只保留一个媒体（旧 video/img 释放）
       // 新媒体就绪后立即采样亮度 → 文字颜色快速匹配（避免轮换后短暂不清晰）
       const onReady = () => {
         wpBrightStable = 0;
@@ -142,11 +147,8 @@ async function renderWallpaper() {
       }
     };
     show(0);
-    let i = 1;
-    wpRotateTimer = setInterval(() => {
-      show(i);
-      i = (i + 1) % wpFiles.length;
-    }, interval);
+    showWpNext = () => show(wpIndex + 1);
+    wpRotateTimer = setInterval(showWpNext, interval);
   }
   const shade = document.createElement('div');
   shade.className = 'shade';
@@ -157,8 +159,37 @@ async function renderWallpaper() {
   bg.querySelectorAll('video, img, iframe, #wp-media-box').forEach((el) => {
     el.style.opacity = String(op / 100);
   });
+  // 透明度极低(<15)：壁纸几乎不可见 → 背景显示浅色渐变底（类似 DSH 白底），
+  // 文字强制深色（亮度采样 dark=true），保证可读
+  bg.classList.toggle('dim', op < 15);
+  if (op < 15) {
+    bg.style.background = 'linear-gradient(160deg, #f4f6fb, #e2e6f0)';
+    // 强制通知主进程：深色文字
+    wpBrightStable = 0;
+    wpBrightLast = null;
+    api.invoke('wallpaper:brightness', { dark: false });
+  } else {
+    bg.style.background = '';
+  }
   startBrightnessSampling();
 }
+
+/** 目录模式手动切换下一张壁纸（侧边栏按钮调用） */
+function nextWallpaper() {
+  if (wpState?.type !== 'dir' || !wpFiles.length) {
+    toast('仅目录轮换模式支持手动切换（请在壁纸页选择图片目录）', 'err');
+    return;
+  }
+  wpRotateTimer && clearInterval(wpRotateTimer);
+  const interval = Math.max(5, Number(wpState.interval) || 60) * 1000;
+  // 直接显示下一张
+  showWpNext && showWpNext();
+  toast('已切换下一张壁纸', 'ok');
+  wpRotateTimer = setInterval(showWpNext, interval);
+}
+
+/** 由 dir 分支注入的"切下一张"回调（避免全局变量耦合） */
+let showWpNext = null;
 
 let wpBrightTimer = null;
 let wpBrightStable = 0;
@@ -170,16 +201,26 @@ let wpBrightLast = null;
  * 媒体未就绪（readyState<2）时返回 false，调用方可稍后重试。
  */
 function sampleWallpaperBrightness() {
+  // 透明度极低：背景为浅色底 → 强制深色文字（dark=false），不再按壁纸亮度采样
+  const op = Math.max(0, Math.min(100, Number(wpState?.opacity ?? 100)));
+  if (op < 15) {
+    if (wpBrightLast !== false) {
+      wpBrightLast = false;
+      wpBrightStable = 0;
+      api.invoke('wallpaper:brightness', { dark: false });
+    }
+    return true;
+  }
   const media = document.querySelector('#bg video, #bg img, #wp-media-box video, #wp-media-box img');
   if (!media || media.readyState < 2) return false;
   try {
     const c = document.createElement('canvas');
-    c.width = 48;
-    c.height = 27;
+    c.width = 24;
+    c.height = 14;
     const ctx = c.getContext('2d');
     if (!ctx) return false;
-    ctx.drawImage(media, 0, 0, 48, 27);
-    const d = ctx.getImageData(0, 0, 48, 27).data;
+    ctx.drawImage(media, 0, 0, 24, 14);
+    const d = ctx.getImageData(0, 0, 24, 14).data;
     let sum = 0;
     let n = 0;
     for (let i = 0; i < d.length; i += 16) {
@@ -187,7 +228,8 @@ function sampleWallpaperBrightness() {
       n++;
     }
     if (!n) return false;
-    const dark = sum / n < 128;
+    // 默认保持白色文字（用户需求）；只有壁纸接近纯白（平均亮度 > 210）才切深色文字
+    const dark = sum / n > 210;
     if (dark === wpBrightLast) {
       wpBrightStable++;
     } else {
@@ -213,9 +255,9 @@ function startBrightnessSampling() {
       let retries = 0;
       const t = setInterval(() => {
         if (sampleWallpaperBrightness() || ++retries >= 3) clearInterval(t);
-      }, 500);
+      }, 600);
     }
-  }, 2000);
+  }, 5000);
 }
 
 function stopBrightnessSampling() {
@@ -297,6 +339,27 @@ async function init() {
     updateMaxIcon(r.maximized);
   };
   $('#btn-close').onclick = () => api.invoke('window:close');
+  // —— 左侧栏折叠/展开 ——
+  const sideToggleBtn = $('#btn-side-toggle');
+  if (sideToggleBtn) {
+    sideToggleBtn.onclick = async () => {
+      const collapsed = document.body.classList.toggle('side-collapsed');
+      const fold = $('.btn-side-toggle .ic-fold');
+      const unfold = $('.btn-side-toggle .ic-unfold');
+      if (fold) fold.style.display = collapsed ? 'none' : '';
+      if (unfold) unfold.style.display = collapsed ? '' : 'none';
+      api.invoke('ui:settings:set', { sidebarCollapsed: collapsed }).catch(() => {});
+    };
+    // 启动时恢复上次的折叠状态
+    const ui = await api.invoke('ui:settings:get').catch(() => ({}));
+    if (ui.sidebarCollapsed) {
+      document.body.classList.add('side-collapsed');
+      const fold = $('.btn-side-toggle .ic-fold');
+      const unfold = $('.btn-side-toggle .ic-unfold');
+      if (fold) fold.style.display = 'none';
+      if (unfold) unfold.style.display = '';
+    }
+  }
   const wst = await api.invoke('window:state').catch(() => ({ maximized: false }));
   updateMaxIcon(wst.maximized);
   api.on('window:state', (s) => updateMaxIcon(s.maximized));
