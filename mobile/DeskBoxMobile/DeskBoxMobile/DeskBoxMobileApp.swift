@@ -34,11 +34,16 @@ struct HomeView: View {
         Button("PAIR WITH WINDOWS") { pairingFocused = false; _ = sync.configure(uri: pairing) }.buttonStyle(.borderedProminent).disabled(sync.busy)
         Button("SYNC NOW") { sync.sync(store: store) }.buttonStyle(.bordered).disabled(sync.credentials == nil || sync.busy)
         if sync.credentials != nil { Button("清除此手机配对", role: .destructive) { disconnecting = true }.disabled(sync.busy) }
-        Text("版本 " + (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—") + " (" + (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—") + ")").font(.caption2).foregroundStyle(.secondary)
+        Text(versionLabel).font(.caption2).foregroundStyle(.secondary)
     }.padding() } .navigationTitle("DeskBox Mobile")
         .alert("清除此手机配对？", isPresented: $disconnecting) { Button("清除配对", role: .destructive) { sync.disconnect() }; Button("取消", role: .cancel) {} } message: { Text("离线数据和待上传内容会保留。需要彻底撤销设备访问时，请在电脑端撤销设备。") }
     } }
     private func panel(_ title:String,_ value:String)->some View { VStack(alignment:.leading){Text(title).font(.caption).foregroundStyle(.cyan);Text(value).font(.title3.bold()).frame(maxWidth:.infinity,alignment:.leading)}.padding().background(Color(red:0.06,green:0.11,blue:0.18),in:RoundedRectangle(cornerRadius:14)) }
+    private var versionLabel: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
+        return "版本 \(version) (\(build))"
+    }
 }
 
 struct TasksView: View {
@@ -146,3 +151,4 @@ struct IncidentView: View {
 }
 
 struct MobileAIView: View { var body: some View { NavigationStack { ContentUnavailableView("AI Relay Pending",systemImage:"sparkles",description:Text("Windows AI&SI relay is intentionally disabled until an authenticated streaming endpoint is implemented." )).navigationTitle("AI&SI") } } }
+
