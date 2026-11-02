@@ -203,7 +203,7 @@ struct TasksView: View {
                     }.disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }.padding(.horizontal)
                 Picker("状态", selection: $filter) { Text("全部").tag(0); Text("未完成").tag(1); Text("已完成").tag(2) }.pickerStyle(.segmented).padding(.horizontal)
-                Text("待上传 \(store.pending.count) 条 · 编辑后保存在本机，回首页同步").font(.caption).foregroundStyle(.secondary)
+                Text("待上传 \(store.pending.count) 条 · 已保存到本机，开启自动同步后自动提交").font(.caption).foregroundStyle(.secondary)
                 List(visible) { task in
                     HStack {
                         Button {
@@ -274,11 +274,83 @@ struct TaskEditor: View {
     }
 }
 
-struct ProjectsView: View { @EnvironmentObject var store: OfflineStore; var body: some View { NavigationStack { List(store.projects){p in VStack(alignment:.leading){HStack{Text(p.name).font(.headline);Spacer();Text(p.progressApplicable == false ? "N/A" : "\(Int(p.progress))%")};if p.progressApplicable != false { ProgressView(value:p.progress,total:100).tint(.cyan) };Text("\(p.customer) · \(p.equipment)").font(.caption).foregroundStyle(.secondary)}}.navigationTitle("Projects") } } }
-
-struct IncidentView: View {
-    @EnvironmentObject var store: OfflineStore; @State private var description=""; @State private var severity="S3"
-    var body: some View { NavigationStack { Form { Picker("Severity",selection:$severity){ForEach(["S1","S2","S3","S4"],id:\.self){Text($0)}}.pickerStyle(.segmented);TextField("What happened?",text:$description,axis:.vertical);Button("SAVE OFFLINE"){guard !description.isEmpty else{return};var x=Incident();x.description=description;x.severity=severity;store.incidents.append(x);store.queue("incident",id:x.id,value:x);description=""};Section("Recent"){ForEach(store.incidents){x in VStack(alignment:.leading){Text(x.severity+" · "+x.description);Text(x.status.uppercased()).font(.caption).foregroundStyle(.secondary)}}} }.navigationTitle("Incident") } }
+struct ProjectsView: View {
+    @EnvironmentObject var store: OfflineStore
+    @State private var query = ""
+    private var visible: [MobileProject] { store.projects.filter { query.isEmpty || "\($0.name) \($0.number) \($0.customer) \($0.equipment)".localizedCaseInsensitiveContains(query) } }
+    var body: some View {
+        NavigationStack {
+            List(visible) { project in
+                NavigationLink {
+                    Form {
+                        Section("项目进度") {
+                            Text(project.name).font(.headline)
+                            Text(project.progressApplicable == false ? "N/A · 不适用" : "\(Int(project.progress))% 已完成").foregroundStyle(.cyan)
+                            if project.progressApplicable != false { ProgressView(value: project.progress, total: 100).tint(.cyan) }
+                        }
+                        Section("工程信息") {
+                            LabeledContent("项目编号", value: project.number.isEmpty ? "未填写" : project.number)
+                            LabeledContent("客户", value: project.customer.isEmpty ? "未填写" : project.customer)
+                            LabeledContent("设备", value: project.equipment.isEmpty ? "未填写" : project.equipment)
+                            LabeledContent("负责人", value: project.owner.isEmpty ? "未填写" : project.owner)
+                            LabeledContent("截止日期", value: project.deadline.isEmpty ? "未设置" : project.deadline)
+                        }
+                        Section("相关任务") {
+                            let tasks = store.tasks.filter { $0.projectId == project.id }
+                            if tasks.isEmpty { Text("暂无关联任务").foregroundStyle(.secondary) }
+                            ForEach(tasks) { task in Label(task.title, systemImage: task.status == "done" ? "checkmark.circle.fill" : "circle").foregroundStyle(task.status == "done" ? Color.secondary : Color.primary) }
+                        }
+                    }.navigationTitle("项目详情").navigationBarTitleDisplayMode(.inline)
+                } label: {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Image(systemName: "square.stack.3d.up.fill").foregroundStyle(.cyan)
+                            Text(project.name).font(.headline)
+                            Spacer()
+                            Text(project.progressApplicable == false ? "N/A" : "\(Int(project.progress))%").font(.headline.monospacedDigit()).foregroundStyle(.cyan)
+                        }
+                        if project.progressApplicable != false { ProgressView(value: project.progress, total: 100).tint(.cyan) }
+                        Text([project.number, project.customer, project.equipment].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                    }.padding(.vertical, 8)
+                }
+            }
+            .overlay { if visible.isEmpty { ContentUnavailableView("暂无匹配项目", systemImage: "folder", description: Text("项目资料来自电脑同步，可按编号、客户或设备搜索。")) } }
+            .searchable(text: $query, prompt: "搜索项目、编号、客户或设备")
+            .navigationTitle("工程项目")
+        }
+    }
 }
 
-struct MobileAIView: View { var body: some View { NavigationStack { ContentUnavailableView("AI Relay Pending",systemImage:"sparkles",description:Text("Windows AI&SI relay is intentionally disabled until an authenticated streaming endpoint is implemented." )).navigationTitle("AI&SI") } } }
+struct IncidentView: View {
+    @EnvironmentObject var store: OfflineStore
+    @State private var description = ""
+    @State private var severity = "S3"
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("记录现场事件") {
+                    Picker("严重程度", selection: $severity) { ForEach(["S1", "S2", "S3", "S4"], id: \.self) { Text($0) } }.pickerStyle(.segmented)
+                    TextField("描述故障现象、设备状态与现场处理", text: $description, axis: .vertical).lineLimit(4...10)
+                    Button("保存事件 · 自动同步") {
+                        var incident = Incident(); incident.description = description.trimmingCharacters(in: .whitespacesAndNewlines); incident.severity = severity
+                        store.incidents.append(incident); store.queue("incident", id: incident.id, value: incident); description = ""
+                    }.disabled(description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Text("离线内容保存在本机，开启自动同步后提交到电脑。").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("现场记录 · \(store.incidents.count)") {
+                    if store.incidents.isEmpty { Label("暂无事件记录", systemImage: "checkmark.shield").foregroundStyle(.secondary) }
+                    ForEach(store.incidents) { incident in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(incident.severity, systemImage: "exclamationmark.triangle.fill").font(.caption.bold()).foregroundStyle(.orange)
+                            Text(incident.description)
+                            Text(incident.status == "open" ? "待处理" : incident.status).font(.caption).foregroundStyle(.secondary)
+                        }.padding(.vertical, 6)
+                    }
+                }
+            }.navigationTitle("现场事件")
+        }
+    }
+}
+
+struct MobileAIView: View { var body: some View { NavigationStack { ContentUnavailableView("手机 AI 中继待接入",systemImage:"sparkles",description:Text("电脑端 AI&SI 可用；手机对话需要完成带设备授权的流式中继接口，当前版本尚未开放。" )).navigationTitle("AI&SI") } } }
+
