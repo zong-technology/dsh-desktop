@@ -51,6 +51,7 @@ struct HomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     HStack {
+                        Image("BrandMark").resizable().scaledToFit().frame(width: 42, height: 42).clipShape(RoundedRectangle(cornerRadius: 10))
                         VStack(alignment: .leading, spacing: 5) {
                             Text("ENGINEERING WORKSPACE").font(.caption.monospaced()).foregroundStyle(.cyan)
                             Text("工程随行工作台").font(.title2.bold())
