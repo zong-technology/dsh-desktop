@@ -1,0 +1,26 @@
+name: DeskBox unsigned iPhone IPA
+"on":
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/deskbox-ios-unsigned-ipa
+    paths:
+      - mobile/DeskBoxMobile/**
+      - tools/build-ios-unsigned-ipa.sh
+      - .github/workflows/ios-unsigned-ipa.yml
+permissions:
+  contents: read
+jobs:
+  unsigned-ipa:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build unsigned arm64 iPhoneOS IPA
+        run: bash tools/build-ios-unsigned-ipa.sh "$RUNNER_TEMP/DeskBoxMobile-unsigned.ipa"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DeskBoxMobile-unsigned-iphone-ipa
+          path: ${{ runner.temp }}/DeskBoxMobile-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
