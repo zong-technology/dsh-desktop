@@ -21,6 +21,7 @@ struct RootView: View {
 }
 
 struct HomeView: View {
+    @FocusState private var pairingFocused: Bool
     @EnvironmentObject var store: OfflineStore; @EnvironmentObject var sync: SyncClient; @State private var pairing = ""; @State private var disconnecting = false
     var body: some View { NavigationStack { ScrollView { VStack(spacing: 14) {
         panel("CURRENT PROJECT", store.projects.first?.name ?? "No project synced")
@@ -28,10 +29,12 @@ struct HomeView: View {
         panel("SYNC", sync.status)
         if sync.busy { ProgressView("正在与电脑交换数据…") }
         Text("待上传 \(store.pending.count) 条 · 失败时保留本地内容").font(.caption).foregroundStyle(.secondary)
-        TextField("Paste deskbox:// pairing link", text: $pairing).textInputAutocapitalization(.never).textFieldStyle(.roundedBorder)
-        Button("PAIR WITH WINDOWS") { _ = sync.configure(uri: pairing) }.buttonStyle(.borderedProminent).disabled(sync.busy)
+        if !sync.pairingAddress.isEmpty { Text("正在连接电脑：" + sync.pairingAddress).font(.caption).foregroundStyle(.cyan) }
+        TextField("粘贴完整配对链接（不只是六位码）", text: $pairing).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL).textFieldStyle(.roundedBorder).focused($pairingFocused)
+        Button("PAIR WITH WINDOWS") { pairingFocused = false; _ = sync.configure(uri: pairing) }.buttonStyle(.borderedProminent).disabled(sync.busy)
         Button("SYNC NOW") { sync.sync(store: store) }.buttonStyle(.bordered).disabled(sync.credentials == nil || sync.busy)
         if sync.credentials != nil { Button("清除此手机配对", role: .destructive) { disconnecting = true }.disabled(sync.busy) }
+        Text("版本 " + (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—") + " (" + (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—") + ")").font(.caption2).foregroundStyle(.secondary)
     }.padding() } .navigationTitle("DeskBox Mobile")
         .alert("清除此手机配对？", isPresented: $disconnecting) { Button("清除配对", role: .destructive) { sync.disconnect() }; Button("取消", role: .cancel) {} } message: { Text("离线数据和待上传内容会保留。需要彻底撤销设备访问时，请在电脑端撤销设备。") }
     } }
