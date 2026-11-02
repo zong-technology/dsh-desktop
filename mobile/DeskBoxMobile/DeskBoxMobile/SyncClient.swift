@@ -12,6 +12,37 @@ final class SyncClient: NSObject, ObservableObject, URLSessionDelegate {
     @Published private(set) var busy = false
     @Published private(set) var pairingAddress = ""
     private var fingerprintMismatch = false
+    @Published var automatic = UserDefaults.standard.object(forKey: "automaticSync") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(automatic, forKey: "automaticSync") }
+    }
+    @Published private(set) var lastSyncedAt: Date?
+    @Published private(set) var connected = false
+    private var retryAfter = Date.distantPast
+    private var failures = 0
+    private var sendTransportFailed = false
+    @Published private(set) var networkEpoch = 0
+    private let pathMonitor = NWPathMonitor()
+    override init() {
+        super.init()
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            guard path.status == .satisfied else { return }
+            DispatchQueue.main.async { self?.retryAfter = .distantPast; self?.networkEpoch += 1 }
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "DeskBox.NetworkMonitor"))
+    }
+    deinit { pathMonitor.cancel() }
+    @MainActor func automaticSync(store: OfflineStore, force: Bool = false) {
+        guard automatic, credentials != nil, !busy, force || Date() >= retryAfter else { return }
+        sync(store: store)
+    }
+    @MainActor func updateEndpoint(host: String, port: Int) -> Bool {
+        guard !busy, var c = credentials, (1...65535).contains(port) else { return false }
+        var url = URLComponents(); url.scheme = "https"; url.host = host.trimmingCharacters(in: .whitespacesAndNewlines); url.port = port
+        guard let host = url.host, !host.isEmpty, url.url != nil else { status = "请填写有效主机名或IP（不带https://）"; return false }
+        c.host = host; c.port = port
+        guard Keychain.save(c) else { status = "连接地址保存失败"; return false }
+        credentials = c; connected = false; retryAfter = .distantPast; status = "已更新地址，将验证原电脑证书后自动同步"; return true
+    }
 
     func discover(port: UInt16 = 47830, completion: @escaping (DiscoveredDeskBox?) -> Void) {
         let connection = NWConnection(host: "255.255.255.255", port: NWEndpoint.Port(rawValue: port)!, using: .udp)
@@ -53,7 +84,6 @@ final class SyncClient: NSObject, ObservableObject, URLSessionDelegate {
     @MainActor func sync(store: OfflineStore) {
         guard !store.loadFailed else { status = "本地数据未能读取，已暂停同步以保留原文件"; return }
         guard !busy else { return }
-        if let c = credentials, c.expiresAt <= Int64(Date().timeIntervalSince1970 * 1000) { status = "设备授权已过期，请重新配对；离线内容仍保留"; return }
         guard let c = credentials else { status = "NOT PAIRED"; return }; expectedFingerprint = c.thumbprint; status = "SYNCING"
         busy = true
         Task {
@@ -63,30 +93,42 @@ final class SyncClient: NSObject, ObservableObject, URLSessionDelegate {
                 if await send(record, credentials: c) {
                     store.acknowledge(record)
                 }
+                if sendTransportFailed { break }
             }
             do { store.apply(try await pull(credentials: c)) }
-            catch { status = error.localizedDescription; return }
+            catch { connected = false; failures += 1; retryAfter = Date().addingTimeInterval(min(120, 5 * pow(2, Double(min(failures, 5))))); status = "暂未连接，自动重试 · " + error.localizedDescription; return }
+            connected = true; failures = 0; retryAfter = Date().addingTimeInterval(15); lastSyncedAt = Date()
+            if c.expiresAt < Int64(Date().addingTimeInterval(7 * 86400).timeIntervalSince1970 * 1000), var request = authenticated("/device/renew", c) {
+                request.httpMethod = "POST"
+                let session = makeSession(); defer { session.finishTasksAndInvalidate() }
+                if let (data, response) = try? await session.data(for: request), (response as? HTTPURLResponse)?.statusCode == 200,
+                   let value = try? JSONDecoder().decode(TrustExpiry.self, from: data), value.expiresAt > c.expiresAt {
+                    var renewed = c; renewed.expiresAt = value.expiresAt; if Keychain.save(renewed) { credentials = renewed }
+                }
+            }
             status = store.pending.isEmpty ? "ONLINE" : "部分数据未上传或存在冲突，已保留待重试"
         }
     }
 
-    private func send(_ record: SyncRecord, credentials: Credentials) async -> Bool {
-        var request = authenticated("/sync/push", credentials); request.httpMethod = "POST"
+    @MainActor private func send(_ record: SyncRecord, credentials: Credentials) async -> Bool {
+        sendTransportFailed = false
+        guard var request = authenticated("/sync/push", credentials) else { return false }; request.httpMethod = "POST"
         var outgoing = record; outgoing.deviceId = credentials.deviceId
         request.httpBody = try? JSONEncoder().encode(outgoing)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         do {
             let session = makeSession(); defer { session.finishTasksAndInvalidate() }
             let (data, response) = try await session.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200, let ack = try? JSONDecoder().decode(PushResponse.self, from: data) else { return false }
+            guard (response as? HTTPURLResponse)?.statusCode == 200, let ack = try? JSONDecoder().decode(PushResponse.self, from: data) else { sendTransportFailed = true; return false }
             return ack.ok && (ack.result == "Applied" || ack.result == "Duplicate" || ack.result == "Resolved")
-        } catch { return false }
+        } catch { sendTransportFailed = true; return false }
     }
 
     private struct PushResponse: Decodable {
         var ok: Bool; var result: String
         enum CodingKeys: String, CodingKey { case ok = "Ok", result = "Result" }
     }
+    private struct TrustExpiry: Decodable { var expiresAt: Int64; enum CodingKeys: String, CodingKey { case expiresAt = "ExpiresAt" } }
     private func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral; configuration.timeoutIntervalForRequest = 15; configuration.timeoutIntervalForResource = 30
         return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
@@ -109,7 +151,8 @@ final class SyncClient: NSObject, ObservableObject, URLSessionDelegate {
     }
     private func pull(credentials: Credentials) async throws -> [SyncRecord] {
         let session = makeSession(); defer { session.finishTasksAndInvalidate() }
-        let (data, response) = try await session.data(for: authenticated("/sync/pull?since=0", credentials))
+        guard let request = authenticated("/sync/pull?since=0", credentials) else { throw SyncFailure.protocolError }
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw SyncFailure.protocolError }
         if http.statusCode == 401 { throw SyncFailure.unauthorized }
         guard http.statusCode == 200, let records = try? JSONDecoder().decode([SyncRecord].self, from: data) else { throw SyncFailure.protocolError }
@@ -119,8 +162,12 @@ final class SyncClient: NSObject, ObservableObject, URLSessionDelegate {
         case unauthorized, protocolError
         var errorDescription: String? { switch self { case .unauthorized: return "设备授权已撤销或过期，请重新配对；未上传内容已保留"; case .protocolError: return "电脑返回异常数据，未上传内容已保留，请检查版本与网络" } }
     }
-    @MainActor func disconnect() { guard !busy else { return }; Keychain.remove(); credentials = nil; status = "已清除此手机配对；离线数据保留" }
-    private func authenticated(_ path: String, _ c: Credentials) -> URLRequest { var r = URLRequest(url: URL(string: "https://\(c.host):\(c.port)\(path)")!); r.setValue(c.deviceId, forHTTPHeaderField: "X-Device-Id"); r.setValue("Bearer \(c.token)", forHTTPHeaderField: "Authorization"); return r }
+    @MainActor func disconnect() { guard !busy else { return }; Keychain.remove(); credentials = nil; connected = false; status = "已清除此手机配对；离线数据保留" }
+    private func authenticated(_ path: String, _ c: Credentials) -> URLRequest? {
+        var components = URLComponents(); components.scheme = "https"; components.host = c.host; components.port = c.port
+        let parts = path.split(separator: "?", maxSplits: 1); components.path = String(parts[0]); if parts.count > 1 { components.percentEncodedQuery = String(parts[1]) }
+        guard let url = components.url else { return nil }; var request = URLRequest(url: url); request.setValue(c.deviceId, forHTTPHeaderField: "X-Device-Id"); request.setValue("Bearer \(c.token)", forHTTPHeaderField: "Authorization"); return request
+    }
 
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         guard let trust = challenge.protectionSpace.serverTrust, let cert = SecTrustCopyCertificateChain(trust) as? [SecCertificate], let first = cert.first else { completionHandler(.cancelAuthenticationChallenge, nil); return }

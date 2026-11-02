@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 @main struct DeskBoxMobileApp: App {
     @StateObject private var store = OfflineStore()
@@ -7,42 +8,171 @@ import SwiftUI
 }
 
 struct RootView: View {
-    @EnvironmentObject var store: OfflineStore; @EnvironmentObject var sync: SyncClient
+    @EnvironmentObject var store: OfflineStore
+    @EnvironmentObject var sync: SyncClient
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var selectedTab = 0
     var body: some View {
-        TabView {
-            HomeView().tabItem { Label("HOME", systemImage: "square.grid.2x2") }
-            TasksView().disabled(store.loadFailed).tabItem { Label("TASKS", systemImage: "checkmark.circle") }
-            ProjectsView().tabItem { Label("PROJECTS", systemImage: "folder") }
-            IncidentView().disabled(store.loadFailed).tabItem { Label("INCIDENT", systemImage: "exclamationmark.triangle") }
-            MobileAIView().tabItem { Label("AI", systemImage: "sparkles") }
-        }.tint(Color(red: 0.25, green: 0.85, blue: 1)).toolbarBackground(.visible, for: .tabBar)
-        .safeAreaInset(edge: .top) { if !store.storageError.isEmpty { Text(store.storageError).font(.caption).foregroundStyle(.red).padding().frame(maxWidth: .infinity).background(.background) } }
+        TabView(selection: $selectedTab) {
+            HomeView(onNavigate: { selectedTab = $0 }).tabItem { Label("首页", systemImage: "square.grid.2x2") }.tag(0)
+            TasksView().disabled(store.loadFailed).tabItem { Label("任务", systemImage: "checkmark.circle") }.tag(1)
+            ProjectsView().tabItem { Label("项目", systemImage: "folder") }.tag(2)
+            IncidentView().disabled(store.loadFailed).tabItem { Label("事件", systemImage: "exclamationmark.triangle") }.tag(3)
+            MobileAIView().tabItem { Label("AI", systemImage: "sparkles") }.tag(4)
+        }
+        .tint(.cyan).toolbarBackground(.visible, for: .tabBar)
+        .safeAreaInset(edge: .top) { if !store.storageError.isEmpty { Text(store.storageError).font(.caption).foregroundStyle(.red).padding().frame(maxWidth: .infinity).background(Color.black) } }
+        .task {
+            while !Task.isCancelled {
+                if scenePhase == .active { sync.automaticSync(store: store) }
+                do { try await Task.sleep(nanoseconds: 15_000_000_000) } catch { break }
+            }
+        }
+        .onChange(of: scenePhase) { _, value in if value == .active { sync.automaticSync(store: store, force: true) } }
+        .onChange(of: sync.credentials?.deviceId) { _, _ in sync.automaticSync(store: store, force: true) }
+        .onChange(of: sync.networkEpoch) { _, _ in if scenePhase == .active { sync.automaticSync(store: store, force: true) } }
+        .onChange(of: sync.automatic) { _, enabled in if enabled && scenePhase == .active { sync.automaticSync(store: store, force: true) } }
+        .onReceive(store.$pending.debounce(for: .milliseconds(900), scheduler: RunLoop.main)) { pending in
+            if !pending.isEmpty && scenePhase == .active { sync.automaticSync(store: store, force: sync.connected) }
+        }
     }
 }
 
 struct HomeView: View {
-    @FocusState private var pairingFocused: Bool
-    @EnvironmentObject var store: OfflineStore; @EnvironmentObject var sync: SyncClient; @State private var pairing = ""; @State private var disconnecting = false
-    var body: some View { NavigationStack { ScrollView { VStack(spacing: 14) {
-        panel("CURRENT PROJECT", store.projects.first?.name ?? "No project synced")
-        HStack { panel("TODAY", "\(store.tasks.filter{$0.status != "done"}.count) open"); panel("URGENT", "\(store.tasks.filter{$0.priority == "high"}.count) high") }
-        panel("SYNC", sync.status)
-        if sync.busy { ProgressView("正在与电脑交换数据…") }
-        Text("待上传 \(store.pending.count) 条 · 失败时保留本地内容").font(.caption).foregroundStyle(.secondary)
-        if !sync.pairingAddress.isEmpty { Text("正在连接电脑：" + sync.pairingAddress).font(.caption).foregroundStyle(.cyan) }
-        TextField("粘贴完整配对链接（不只是六位码）", text: $pairing).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL).textFieldStyle(.roundedBorder).focused($pairingFocused)
-        Button("PAIR WITH WINDOWS") { pairingFocused = false; _ = sync.configure(uri: pairing) }.buttonStyle(.borderedProminent).disabled(sync.busy)
-        Button("SYNC NOW") { sync.sync(store: store) }.buttonStyle(.bordered).disabled(sync.credentials == nil || sync.busy)
-        if sync.credentials != nil { Button("清除此手机配对", role: .destructive) { disconnecting = true }.disabled(sync.busy) }
-        Text(versionLabel).font(.caption2).foregroundStyle(.secondary)
-    }.padding() } .navigationTitle("DeskBox Mobile")
-        .alert("清除此手机配对？", isPresented: $disconnecting) { Button("清除配对", role: .destructive) { sync.disconnect() }; Button("取消", role: .cancel) {} } message: { Text("离线数据和待上传内容会保留。需要彻底撤销设备访问时，请在电脑端撤销设备。") }
-    } }
-    private func panel(_ title:String,_ value:String)->some View { VStack(alignment:.leading){Text(title).font(.caption).foregroundStyle(.cyan);Text(value).font(.title3.bold()).frame(maxWidth:.infinity,alignment:.leading)}.padding().background(Color(red:0.06,green:0.11,blue:0.18),in:RoundedRectangle(cornerRadius:14)) }
+    @EnvironmentObject var store: OfflineStore
+    @EnvironmentObject var sync: SyncClient
+    @AppStorage("selectedMobileProject") private var projectId = ""
+    @State private var connectionSettings = false
+    var onNavigate: (Int) -> Void
+    private var currentProject: MobileProject? { store.projects.first(where: { $0.id == projectId }) ?? store.projects.first }
+    private var openTasks: [MobileTask] { store.tasks.filter { $0.status != "done" }.sorted { $0.priority == "high" && $1.priority != "high" } }
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("ENGINEERING WORKSPACE").font(.caption.monospaced()).foregroundStyle(.cyan)
+                            Text("工程随行工作台").font(.title2.bold())
+                        }
+                        Spacer()
+                        if sync.busy { ProgressView() }
+                        Image(systemName: sync.connected ? "checkmark.icloud.fill" : "icloud.slash").foregroundStyle(sync.connected ? Color.green : Color.gray)
+                    }
+                    projectPanel
+                    HStack(spacing: 12) {
+                        metric("未完成任务", value: openTasks.count, color: .cyan)
+                        metric("高优先级", value: openTasks.filter { $0.priority == "high" }.count, color: .orange)
+                    }
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack { Label("同步与连接", systemImage: "arrow.triangle.2.circlepath").font(.headline); Spacer(); Text(sync.automatic ? "自动" : "手动").foregroundStyle(.cyan) }
+                        Text(sync.status).font(.subheadline).foregroundStyle(.secondary)
+                        HStack {
+                            Text("待上传 \(store.pending.count) 条")
+                            Spacer()
+                            if let date = sync.lastSyncedAt { Text(date, style: .time) }
+                        }.font(.caption).foregroundStyle(.secondary)
+                        if sync.credentials == nil { Button("首次连接电脑") { connectionSettings = true }.buttonStyle(.borderedProminent) }
+                    }.padding().background(panelColor, in: RoundedRectangle(cornerRadius: 18))
+                    HStack(spacing: 12) {
+                        shortcut("工程任务", detail: "编辑 · 提醒 · 完成", icon: "checklist", tab: 1)
+                        shortcut("项目资料", detail: "进度 · 设备 · 客户", icon: "folder.badge.gearshape", tab: 2)
+                    }
+                    HStack(spacing: 12) {
+                        shortcut("现场事件", detail: "记录问题 · 离线保存", icon: "exclamationmark.bubble", tab: 3)
+                        shortcut("AI 助手", detail: "中继功能待完成", icon: "sparkles", tab: 4)
+                    }
+                    HStack { Text("当前待办").font(.headline); Spacer(); Button("全部任务") { onNavigate(1) }.font(.caption) }
+                    if openTasks.isEmpty { Text("当前没有未完成任务").foregroundStyle(.secondary) }
+                    ForEach(Array(openTasks.prefix(4))) { task in
+                        HStack(alignment: .top) {
+                            Image(systemName: task.priority == "high" ? "exclamationmark.circle.fill" : "circle").foregroundStyle(task.priority == "high" ? .orange : .cyan)
+                            VStack(alignment: .leading, spacing: 4) { Text(task.title); if !task.due.isEmpty { Text("截止 " + task.due).font(.caption).foregroundStyle(.secondary) } }
+                            Spacer()
+                        }.padding().frame(maxWidth: .infinity, alignment: .leading).background(panelColor, in: RoundedRectangle(cornerRadius: 14))
+                    }
+                }.padding()
+            }
+            .background(Color(red: 0.02, green: 0.04, blue: 0.08))
+            .navigationTitle("DeskBox").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { connectionSettings = true } label: { Image(systemName: "network") } } }
+            .sheet(isPresented: $connectionSettings) { ConnectionSettingsView() }
+        }
+    }
+    private var panelColor: Color { Color(red: 0.055, green: 0.09, blue: 0.15) }
+    private var projectPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack { Text("当前项目").font(.caption).foregroundStyle(.cyan); Spacer(); Button("查看") { onNavigate(2) }.font(.caption) }
+            if let project = currentProject {
+                Text(project.name).font(.title3.bold())
+                Text(project.number + (project.equipment.isEmpty ? "" : " · " + project.equipment)).font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    if project.progressApplicable == false { Text("N/A").font(.title.bold()).foregroundStyle(.cyan) }
+                    else { ProgressView(value: min(100, max(0, project.progress)), total: 100).tint(.cyan); Text("\(Int(project.progress))%").font(.title3.monospacedDigit().bold()) }
+                }
+                if store.projects.count > 1 {
+                    Picker("切换项目", selection: Binding(get: { currentProject?.id ?? "" }, set: { projectId = $0 })) { ForEach(store.projects) { Text($0.name).tag($0.id) } }.pickerStyle(.menu)
+                }
+            } else { Text("尚未同步项目").font(.title3); Text("连接电脑后将自动加载项目进度").font(.caption).foregroundStyle(.secondary) }
+        }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
+        .background(LinearGradient(colors: [Color(red: 0.04, green: 0.16, blue: 0.22), panelColor], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).stroke(.cyan.opacity(0.25)))
+    }
+    private func metric(_ title: String, value: Int, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) { Text(title).font(.caption).foregroundStyle(.secondary); Text("\(value)").font(.title.bold().monospacedDigit()).foregroundStyle(color) }.padding().frame(maxWidth: .infinity, alignment: .leading).background(panelColor, in: RoundedRectangle(cornerRadius: 16))
+    }
+    private func shortcut(_ title: String, detail: String, icon: String, tab: Int) -> some View {
+        Button { onNavigate(tab) } label: { VStack(alignment: .leading, spacing: 8) { Image(systemName: icon).font(.title3).foregroundStyle(.cyan); Text(title).font(.headline).foregroundStyle(.primary); Text(detail).font(.caption).foregroundStyle(.secondary) }.padding().frame(maxWidth: .infinity, alignment: .leading).background(panelColor, in: RoundedRectangle(cornerRadius: 16)) }.buttonStyle(.plain)
+    }
+}
+
+struct ConnectionSettingsView: View {
+    @EnvironmentObject var store: OfflineStore
+    @EnvironmentObject var sync: SyncClient
+    @Environment(\.dismiss) private var dismiss
+    @State private var pairing = ""
+    @State private var host = ""
+    @State private var port = "47831"
+    @State private var confirmReset = false
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("自动同步") {
+                    Toggle("自动连接与同步", isOn: $sync.automatic)
+                    Text("应用回到前台、网络恢复、编辑后自动同步；前台每15秒刷新。iOS长期后台或被结束后不能保证持续运行。").font(.caption).foregroundStyle(.secondary)
+                    Text(sync.status).font(.caption)
+                    Button("立即同步") { sync.sync(store: store) }.disabled(sync.credentials == nil || sync.busy)
+                }
+                if let credentials = sync.credentials {
+                    Section("已记住此电脑") {
+                        LabeledContent("地址", value: credentials.host + ":" + String(credentials.port))
+                        Text("无需重复配对。证书更换、设备撤销、长期过期或清除配对后才需重新建立信任。").font(.caption)
+                    }
+                    Section("跨网络 / 地址变更") {
+                        TextField("固定IP或主机名（不带https://）", text: $host).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        TextField("端口", text: $port).keyboardType(.numberPad)
+                        Button("保存地址，保留当前配对") { if let number = Int(port), sync.updateEndpoint(host: host, port: number) { sync.automaticSync(store: store, force: true) } }.disabled(sync.busy)
+                        Text("不同网络需先在电脑与手机建立Tailscale/ZeroTier等私有网络，再填写电脑固定虚拟IP。这里只更新连接地址，不提供公网中继，也不会跳过原电脑的证书校验。").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Section(sync.credentials == nil ? "首次配对" : "重新配对（通常不需要）") {
+                    TextField("电脑端完整deskbox://配对链接", text: $pairing).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                    Button("连接电脑") { _ = sync.configure(uri: pairing) }.disabled(sync.busy || pairing.isEmpty)
+                }
+                if sync.credentials != nil {
+                    Section { Button("清除此手机配对", role: .destructive) { confirmReset = true }.disabled(sync.busy) }
+                }
+                Section("版本") { Text(versionLabel).font(.caption) }
+            }.navigationTitle("连接设置")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+            .onAppear { host = sync.credentials?.host ?? ""; port = String(sync.credentials?.port ?? 47831) }
+            .alert("清除配对？离线数据仍保留", isPresented: $confirmReset) { Button("清除", role: .destructive) { sync.disconnect() }; Button("取消", role: .cancel) {} }
+        }
+    }
     private var versionLabel: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
-        return "版本 \(version) (\(build))"
+        return "\(version) (\(build))"
     }
 }
 
@@ -151,4 +281,3 @@ struct IncidentView: View {
 }
 
 struct MobileAIView: View { var body: some View { NavigationStack { ContentUnavailableView("AI Relay Pending",systemImage:"sparkles",description:Text("Windows AI&SI relay is intentionally disabled until an authenticated streaming endpoint is implemented." )).navigationTitle("AI&SI") } } }
-
