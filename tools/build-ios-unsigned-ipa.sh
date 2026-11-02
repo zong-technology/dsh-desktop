@@ -25,7 +25,7 @@ if [ "$PLATFORM" != "iphoneos" ]; then
 fi
 BINARY="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
 test -f "$APP/$BINARY"
-xcrun lipo -verify_arch arm64 "$APP/$BINARY"
+xcrun lipo "$APP/$BINARY" -verify_arch arm64
 mkdir -p "$WORK/package/Payload" "$(dirname "$OUTPUT")"
 ditto "$APP" "$WORK/package/Payload/DeskBoxMobile.app"
 ditto -c -k --keepParent "$WORK/package/Payload" "$OUTPUT"
@@ -33,3 +33,4 @@ unzip -Z1 "$OUTPUT" | grep -Fx "Payload/DeskBoxMobile.app/$BINARY"
 shasum -a 256 "$OUTPUT"
 echo "Unsigned iPhoneOS IPA: $OUTPUT"
 echo "Build working directory: $WORK"
+
