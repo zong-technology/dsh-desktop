@@ -4,14 +4,18 @@ import Combine
 @main struct DeskBoxMobileApp: App {
     @StateObject private var store = OfflineStore()
     @StateObject private var sync = SyncClient()
-    var body: some Scene { WindowGroup { RootView().environmentObject(store).environmentObject(sync).preferredColorScheme(.dark) } }
+    @StateObject private var briefing = DailyBriefing()
+    var body: some Scene { WindowGroup { RootView().environmentObject(store).environmentObject(sync).environmentObject(briefing).preferredColorScheme(.dark) } }
 }
 
 struct RootView: View {
     @EnvironmentObject var store: OfflineStore
     @EnvironmentObject var sync: SyncClient
+    @EnvironmentObject var briefing: DailyBriefing
     @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab = 0
+    @State private var cloudImport = ""
+    @State private var confirmCloud = false
     var body: some View {
         TabView(selection: $selectedTab) {
             HomeView(onNavigate: { selectedTab = $0 }).tabItem { Label("首页", systemImage: "square.grid.2x2") }.tag(0)
@@ -24,17 +28,25 @@ struct RootView: View {
         .safeAreaInset(edge: .top) { if !store.storageError.isEmpty { Text(store.storageError).font(.caption).foregroundStyle(.red).padding().frame(maxWidth: .infinity).background(Color.black) } }
         .task {
             while !Task.isCancelled {
-                if scenePhase == .active { sync.automaticSync(store: store) }
+                if scenePhase == .active { sync.automaticSync(store: store); await briefing.tick(tasks: store.tasks) }
                 do { try await Task.sleep(nanoseconds: 15_000_000_000) } catch { break }
             }
         }
-        .onChange(of: scenePhase) { _, value in if value == .active { sync.automaticSync(store: store, force: true) } }
+        .onChange(of: scenePhase) { _, value in if value == .active { sync.automaticSync(store: store, force: true); Task { await briefing.resume(tasks: store.tasks) } } else { briefing.stopSpeaking() } }
         .onChange(of: sync.credentials?.deviceId) { _, _ in sync.automaticSync(store: store, force: true) }
+        .onChange(of: sync.cloudCredential?.deviceId) { _, _ in sync.automaticSync(store: store, force: true) }
         .onChange(of: sync.networkEpoch) { _, _ in if scenePhase == .active { sync.automaticSync(store: store, force: true) } }
         .onChange(of: sync.automatic) { _, enabled in if enabled && scenePhase == .active { sync.automaticSync(store: store, force: true) } }
         .onReceive(store.$pending.debounce(for: .milliseconds(900), scheduler: RunLoop.main)) { pending in
             if !pending.isEmpty && scenePhase == .active { sync.automaticSync(store: store, force: sync.connected) }
         }
+        .onReceive(store.$tasks.debounce(for: .milliseconds(900), scheduler: RunLoop.main)) { tasks in briefing.reschedule(tasks: tasks) }
+        .onReceive(briefing.$preferences.debounce(for: .milliseconds(500), scheduler: RunLoop.main)) { _ in briefing.reschedule(tasks: store.tasks) }
+        .onOpenURL { url in if CloudCredential.decode(url.absoluteString) != nil { cloudImport = url.absoluteString; confirmCloud = true } }
+        .alert("连接此云账号？", isPresented: $confirmCloud) {
+            Button("连接并同步") { if sync.importCloud(cloudImport) { sync.automaticSync(store: store, force: true) }; cloudImport = "" }
+            Button("取消", role: .cancel) { cloudImport = "" }
+        } message: { Text("连接后项目、任务及事件会同步至 \(CloudCredential.decode(cloudImport)?.baseUrl ?? "")，离线修改保留。") }
     }
 }
 
@@ -61,6 +73,7 @@ struct HomeView: View {
                         Image(systemName: sync.connected ? "checkmark.icloud.fill" : "icloud.slash").foregroundStyle(sync.connected ? Color.green : Color.gray)
                     }
                     projectPanel
+                    DailyBriefingCard()
                     HStack(spacing: 12) {
                         metric("未完成任务", value: openTasks.count, color: .cyan)
                         metric("高优先级", value: openTasks.filter { $0.priority == "high" }.count, color: .orange)
@@ -68,12 +81,13 @@ struct HomeView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack { Label("同步与连接", systemImage: "arrow.triangle.2.circlepath").font(.headline); Spacer(); Text(sync.automatic ? "自动" : "手动").foregroundStyle(.cyan) }
                         Text(sync.status).font(.subheadline).foregroundStyle(.secondary)
+                        if !sync.activeEndpoint.isEmpty { Text(sync.activeEndpoint).font(.caption.monospaced()).foregroundStyle(.cyan) }
                         HStack {
                             Text("待上传 \(store.pending.count) 条")
                             Spacer()
                             if let date = sync.lastSyncedAt { Text(date, style: .time) }
                         }.font(.caption).foregroundStyle(.secondary)
-                        if sync.credentials == nil { Button("首次连接电脑") { connectionSettings = true }.buttonStyle(.borderedProminent) }
+                        if sync.credentials == nil && sync.cloudCredential == nil { Button("登录云账号 / 连接电脑") { connectionSettings = true }.buttonStyle(.borderedProminent) }
                     }.padding().background(panelColor, in: RoundedRectangle(cornerRadius: 18))
                     HStack(spacing: 12) {
                         shortcut("工程任务", detail: "编辑 · 提醒 · 完成", icon: "checklist", tab: 1)
@@ -135,6 +149,9 @@ struct ConnectionSettingsView: View {
     @State private var host = ""
     @State private var port = "47831"
     @State private var confirmReset = false
+    @State private var remoteHost = ""
+    @State private var remotePort = "47831"
+    @State private var cloudImport = ""
     var body: some View {
         NavigationStack {
             Form {
@@ -142,18 +159,38 @@ struct ConnectionSettingsView: View {
                     Toggle("自动连接与同步", isOn: $sync.automatic)
                     Text("应用回到前台、网络恢复、编辑后自动同步；前台每15秒刷新。iOS长期后台或被结束后不能保证持续运行。").font(.caption).foregroundStyle(.secondary)
                     Text(sync.status).font(.caption)
-                    Button("立即同步") { sync.sync(store: store) }.disabled(sync.credentials == nil || sync.busy)
+                    Button("立即同步") { sync.sync(store: store) }.disabled((sync.credentials == nil && sync.cloudCredential == nil) || sync.busy)
+                }
+                Section("账号云同步 · 不同网络") {
+                    Link("登录账号并授权此 iPhone", destination: CloudCredential.loginURL)
+                    Text("在私人网页登录同一账号，选择iPhone并生成授权，点击“导入此iPhone”。电脑也需登录网页并授权Windows主电脑。首次授权后无需VPN或反复配对。").font(.caption).foregroundStyle(.secondary)
+                    if let credential = sync.cloudCredential {
+                        LabeledContent("云账号已连接", value: URL(string: credential.baseUrl)?.host ?? "")
+                        Button("退出云账号", role: .destructive) { sync.logoutCloud() }.disabled(sync.busy)
+                    } else {
+                        SecureField("或粘贴网页复制的iPhone连接凭证", text: $cloudImport).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Button("导入云账号并同步") { if sync.importCloud(cloudImport) { cloudImport = ""; sync.automaticSync(store: store, force: true) } }.disabled(sync.busy || cloudImport.isEmpty)
+                    }
+                    Text("手机前台自动同步；电脑离线时可读云端快照，新提交等待电脑上线确认。云账号启用时优先使用云同步。").font(.caption).foregroundStyle(.secondary)
                 }
                 if let credentials = sync.credentials {
                     Section("已记住此电脑") {
                         LabeledContent("地址", value: credentials.host + ":" + String(credentials.port))
                         Text("无需重复配对。证书更换、设备撤销、长期过期或清除配对后才需重新建立信任。").font(.caption)
                     }
-                    Section("跨网络 / 地址变更") {
+                    Section("局域网地址变更") {
                         TextField("固定IP或主机名（不带https://）", text: $host).textInputAutocapitalization(.never).autocorrectionDisabled()
                         TextField("端口", text: $port).keyboardType(.numberPad)
                         Button("保存地址，保留当前配对") { if let number = Int(port), sync.updateEndpoint(host: host, port: number) { sync.automaticSync(store: store, force: true) } }.disabled(sync.busy)
-                        Text("不同网络需先在电脑与手机建立Tailscale/ZeroTier等私有网络，再填写电脑固定虚拟IP。这里只更新连接地址，不提供公网中继，也不会跳过原电脑的证书校验。").font(.caption).foregroundStyle(.secondary)
+                        Text("电脑局域网IP变化时更新；备用跨网络地址在下方单独保存。").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Section("不同网络自动切换") {
+                        TextField("电脑Tailscale固定IP或主机名", text: $remoteHost).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        TextField("备用端口", text: $remotePort).keyboardType(.numberPad)
+                        Button("保存备用地址并测试连接") { if let number = Int(remotePort), sync.updateRemoteEndpoint(host: remoteHost, port: number) { sync.automaticSync(store: store, force: true) } }.disabled(sync.busy)
+                        if sync.remoteEndpoint != nil { Button("移除备用地址", role: .destructive) { sync.removeRemoteEndpoint(); remoteHost = "" }.disabled(sync.busy) }
+                        Link("安装/配置 iPhone Tailscale", destination: URL(string: "https://tailscale.com/download/ios")!)
+                        Text("两端Tailscale登录同一账号并保持开启；电脑Local Sync需运行。优先最近成功的地址，失败后自动尝试另一地址，保留同一配对和证书校验。iOS锁屏后不保证持续同步。").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 Section(sync.credentials == nil ? "首次配对" : "重新配对（通常不需要）") {
@@ -166,7 +203,7 @@ struct ConnectionSettingsView: View {
                 Section("版本") { Text(versionLabel).font(.caption) }
             }.navigationTitle("连接设置")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
-            .onAppear { host = sync.credentials?.host ?? ""; port = String(sync.credentials?.port ?? 47831) }
+            .onAppear { host = sync.credentials?.host ?? ""; port = String(sync.credentials?.port ?? 47831); remoteHost = sync.remoteEndpoint?.host ?? ""; remotePort = String(sync.remoteEndpoint?.port ?? 47831) }
             .alert("清除配对？离线数据仍保留", isPresented: $confirmReset) { Button("清除", role: .destructive) { sync.disconnect() }; Button("取消", role: .cancel) {} }
         }
     }

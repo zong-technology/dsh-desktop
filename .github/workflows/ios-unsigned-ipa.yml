@@ -16,6 +16,10 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Check briefing selection, scheduling and endpoint rules
+        run: |
+          swiftc mobile/DeskBoxMobile/DeskBoxMobile/Models.swift mobile/DeskBoxMobile/DeskBoxMobile/BriefingRules.swift mobile/DeskBoxMobile/DeskBoxMobile/SyncEndpoint.swift mobile/DeskBoxMobile/DeskBoxMobile/CloudAccount.swift tools/mobile-briefing-check.swift -o "$RUNNER_TEMP/briefing-check"
+          "$RUNNER_TEMP/briefing-check"
       - name: Build unsigned arm64 iPhoneOS IPA
         run: bash tools/build-ios-unsigned-ipa.sh "$RUNNER_TEMP/DeskBoxMobile-unsigned.ipa"
       - uses: actions/upload-artifact@v4
@@ -24,3 +28,4 @@ jobs:
           path: ${{ runner.temp }}/DeskBoxMobile-unsigned.ipa
           if-no-files-found: error
           retention-days: 7
+
