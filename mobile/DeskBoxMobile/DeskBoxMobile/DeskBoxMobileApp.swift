@@ -364,5 +364,3 @@ struct ProjectsView: View {
 }
 
 
-struct MobileAIView: View { var body: some View { NavigationStack { ContentUnavailableView("手机 AI 中继待接入",systemImage:"sparkles",description:Text("电脑端 AI&SI 可用；手机对话需要完成带设备授权的流式中继接口，当前版本尚未开放。" )).navigationTitle("AI&SI") } } }
-

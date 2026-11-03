@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
+  <key>NSMicrophoneUsageDescription</key><string>将你的语音识别为工程助手问题，仅在你开启语音时使用麦克风。</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>识别中文语音以和AI&amp;SI工程助手对话，可随时停止。</string>
   <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>com.deskbox.mobile</string><key>CFBundleURLSchemes</key><array><string>deskbox</string></array></dict></array>
   <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
   <key>NSLocalNetworkUsageDescription</key><string>连接同一局域网的 DeskBox 电脑，配对并同步工程任务与项目资料。</string>
 </dict></plist>
-

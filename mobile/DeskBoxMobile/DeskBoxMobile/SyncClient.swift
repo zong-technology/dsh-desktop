@@ -104,6 +104,14 @@ final class SyncClient: NSObject, ObservableObject, URLSessionDelegate {
         request.setValue("Bearer " + credential.gateToken, forHTTPHeaderField: "OAI-Sites-Authorization")
         return request
     }
+    @MainActor func mobileAIRequest(_ action: String, body: Data? = nil) async throws -> Data {
+        guard let credential = cloudCredential else { throw SyncFailure.cloudUnauthorized }
+        var request = cloudRequest(action, credential)
+        if let body { request.httpMethod = "POST"; request.httpBody = body }
+        let (data, response) = try await cloudSession.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode == 404 { throw NSError(domain: "DeskBoxAI", code: 404, userInfo: [NSLocalizedDescriptionKey: "手机AI服务尚未部署或该请求不存在，请确认电脑和云端已升级"]) }
+        try checkCloudResponse(response); return data
+    }
     private func checkCloudResponse(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else { throw SyncFailure.protocolError }
         if http.statusCode == 401 || http.statusCode == 403 || (300..<400).contains(http.statusCode) { throw SyncFailure.cloudUnauthorized }
@@ -278,4 +286,3 @@ enum Keychain {
     }
     static func load<T: Decodable>(account: String = key) -> T? { var result: AnyObject?; let query = [kSecClass: kSecClassGenericPassword, kSecAttrAccount: account, kSecReturnData: true, kSecMatchLimit: kSecMatchLimitOne] as CFDictionary; guard SecItemCopyMatching(query, &result) == errSecSuccess, let data = result as? Data else { return nil }; return try? JSONDecoder().decode(T.self, from: data) }
 }
-
