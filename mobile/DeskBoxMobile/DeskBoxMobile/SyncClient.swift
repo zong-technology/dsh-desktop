@@ -82,6 +82,7 @@ final class SyncClient: NSObject, ObservableObject, URLSessionDelegate {
                     let (data, response) = try await cloudSession.data(for: request)
                     try checkCloudResponse(response)
                     let result = try JSONDecoder().decode(PushResponse.self, from: data)
+                    if result.result == "Conflict" { store.noteConflict(record) }
                     if result.ok && ["Applied", "Duplicate", "Resolved"].contains(result.result) { store.acknowledge(record) }
                 }
                 let (data, response) = try await cloudSession.data(for: cloudRequest("pull", credential))
@@ -164,7 +165,7 @@ final class SyncClient: NSObject, ObservableObject, URLSessionDelegate {
                     // Authenticate this route before uploading; pending edits survive the probe pull.
                     store.apply(try await pull(credentials: candidate))
                     for record in store.pending {
-                        if await send(record, credentials: candidate) { store.acknowledge(record) }
+                        if await send(record, credentials: candidate, store: store) { store.acknowledge(record) }
                         if sendTransportFailed { throw SyncFailure.protocolError }
                     }
                     store.apply(try await pull(credentials: candidate))
@@ -189,7 +190,7 @@ final class SyncClient: NSObject, ObservableObject, URLSessionDelegate {
         }
     }
 
-    @MainActor private func send(_ record: SyncRecord, credentials: Credentials) async -> Bool {
+    @MainActor private func send(_ record: SyncRecord, credentials: Credentials, store: OfflineStore) async -> Bool {
         sendTransportFailed = false
         guard var request = authenticated("/sync/push", credentials) else { return false }; request.httpMethod = "POST"
         var outgoing = record; outgoing.deviceId = credentials.deviceId
@@ -199,6 +200,7 @@ final class SyncClient: NSObject, ObservableObject, URLSessionDelegate {
             let session = makeSession(); defer { session.finishTasksAndInvalidate() }
             let (data, response) = try await session.data(for: request)
             guard (response as? HTTPURLResponse)?.statusCode == 200, let ack = try? JSONDecoder().decode(PushResponse.self, from: data) else { sendTransportFailed = true; return false }
+            if ack.result == "Conflict" { store.noteConflict(record) }
             return ack.ok && (ack.result == "Applied" || ack.result == "Duplicate" || ack.result == "Resolved")
         } catch { sendTransportFailed = true; return false }
     }

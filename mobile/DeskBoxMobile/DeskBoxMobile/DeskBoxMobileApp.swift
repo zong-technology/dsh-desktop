@@ -55,6 +55,7 @@ struct HomeView: View {
     @EnvironmentObject var sync: SyncClient
     @AppStorage("selectedMobileProject") private var projectId = ""
     @State private var connectionSettings = false
+    @State private var conflictDetails = false
     var onNavigate: (Int) -> Void
     private var currentProject: MobileProject? { store.projects.first(where: { $0.id == projectId }) ?? store.projects.first }
     private var openTasks: [MobileTask] { store.tasks.filter { $0.status != "done" }.sorted { $0.priority == "high" && $1.priority != "high" } }
@@ -81,6 +82,7 @@ struct HomeView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack { Label("同步与连接", systemImage: "arrow.triangle.2.circlepath").font(.headline); Spacer(); Text(sync.automatic ? "自动" : "手动").foregroundStyle(.cyan) }
                         Text(sync.status).font(.subheadline).foregroundStyle(.secondary)
+                        if !store.conflicts.isEmpty { Button("处理\(store.conflicts.count)项同步冲突") { conflictDetails = true }.foregroundStyle(.orange) }
                         if !sync.activeEndpoint.isEmpty { Text(sync.activeEndpoint).font(.caption.monospaced()).foregroundStyle(.cyan) }
                         HStack {
                             Text("待上传 \(store.pending.count) 条")
@@ -112,6 +114,7 @@ struct HomeView: View {
             .navigationTitle("DeskBox").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button { connectionSettings = true } label: { Image(systemName: "network") } } }
             .sheet(isPresented: $connectionSettings) { ConnectionSettingsView() }
+            .sheet(isPresented: $conflictDetails) { SyncConflictView() }
         }
     }
     private var panelColor: Color { Color(red: 0.055, green: 0.09, blue: 0.15) }
@@ -360,36 +363,6 @@ struct ProjectsView: View {
     }
 }
 
-struct IncidentView: View {
-    @EnvironmentObject var store: OfflineStore
-    @State private var description = ""
-    @State private var severity = "S3"
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("记录现场事件") {
-                    Picker("严重程度", selection: $severity) { ForEach(["S1", "S2", "S3", "S4"], id: \.self) { Text($0) } }.pickerStyle(.segmented)
-                    TextField("描述故障现象、设备状态与现场处理", text: $description, axis: .vertical).lineLimit(4...10)
-                    Button("保存事件 · 自动同步") {
-                        var incident = Incident(); incident.description = description.trimmingCharacters(in: .whitespacesAndNewlines); incident.severity = severity
-                        store.incidents.append(incident); store.queue("incident", id: incident.id, value: incident); description = ""
-                    }.disabled(description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    Text("离线内容保存在本机，开启自动同步后提交到电脑。").font(.caption).foregroundStyle(.secondary)
-                }
-                Section("现场记录 · \(store.incidents.count)") {
-                    if store.incidents.isEmpty { Label("暂无事件记录", systemImage: "checkmark.shield").foregroundStyle(.secondary) }
-                    ForEach(store.incidents) { incident in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label(incident.severity, systemImage: "exclamationmark.triangle.fill").font(.caption.bold()).foregroundStyle(.orange)
-                            Text(incident.description)
-                            Text(incident.status == "open" ? "待处理" : incident.status).font(.caption).foregroundStyle(.secondary)
-                        }.padding(.vertical, 6)
-                    }
-                }
-            }.navigationTitle("现场事件")
-        }
-    }
-}
 
 struct MobileAIView: View { var body: some View { NavigationStack { ContentUnavailableView("手机 AI 中继待接入",systemImage:"sparkles",description:Text("电脑端 AI&SI 可用；手机对话需要完成带设备授权的流式中继接口，当前版本尚未开放。" )).navigationTitle("AI&SI") } } }
 

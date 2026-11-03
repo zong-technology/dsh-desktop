@@ -1,7 +1,7 @@
 import Foundation
 
 @main struct BriefingCheck {
-    static func main() {
+    @MainActor static func main() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
         let now = calendar.date(from: DateComponents(year: 2026, month: 11, day: 2, hour: 8, minute: 0))!
@@ -45,7 +45,39 @@ import Foundation
         cloud.role = "desktop"; assert(CloudCredential.decode(encoded(cloud)) == nil)
         cloud.role = "ios"; cloud.baseUrl = "http://sync.example"; assert(CloudCredential.decode(encoded(cloud)) == nil)
         cloud.baseUrl = "https://sync.example"; cloud.expiresAt = 0; assert(CloudCredential.decode(encoded(cloud)) == nil)
-        print("Briefing, endpoint and cloud login rules: PASS 24")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("deskbox-mobile-accept-" + UUID().uuidString)
+        try! FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("state.json")
+        let store = OfflineStore(fileURL: path)
+        var incident = Incident(); incident.description = "压力联锁异常"; incident.projectId = "project"; incident.equipment = "PT-101"
+        assert(store.updateIncident(incident) == nil)
+        let original = store.incidents[0].updatedAt
+        incident = store.incidents[0]; incident.status = "closed"
+        assert(store.updateIncident(incident, expectedUpdatedAt: original) != nil)
+        incident.solution = "校准反馈并复测"; incident.cause = "传感器偏移"
+        assert(store.updateIncident(incident, expectedUpdatedAt: original) == nil)
+        assert(store.updateIncident(incident, expectedUpdatedAt: original) != nil)
+        assert(OfflineStore(fileURL: path).incidents[0].solution == incident.solution)
+        let taskStore = OfflineStore(fileURL: directory.appendingPathComponent("tasks.json"))
+        var mobile = MobileTask(); mobile.id = "conflict"; mobile.title = "手机编辑"
+        var serverTask = mobile; serverTask.title = "电脑编辑"
+        let server = SyncRecord(entityType: "task", id: mobile.id, version: 2, baseVersion: 1, updatedAt: 1, deviceId: "windows", json: String(data: try! JSONEncoder().encode(serverTask), encoding: .utf8)!)
+        taskStore.updateTask(mobile); let outgoing = taskStore.pending[0]
+        taskStore.apply([server]); taskStore.noteConflict(outgoing)
+        assert(taskStore.tasks[0].title == "手机编辑" && taskStore.conflicts.count == 1)
+        let savedConflict = taskStore.conflicts[0]
+        assert(OfflineStore(fileURL: directory.appendingPathComponent("tasks.json")).conflicts.count == 1)
+        var newer = server; newer.version = 3; taskStore.apply([newer])
+        assert(taskStore.resolveConflict(savedConflict, keepPhone: true) != nil)
+        assert(taskStore.resolveConflict(taskStore.conflicts[0], keepPhone: true) == nil)
+        assert(taskStore.pending[0].baseVersion == 3 && taskStore.pending[0].version == 4 && taskStore.tasks[0].title == "手机编辑")
+        taskStore.noteConflict(taskStore.pending[0]); var deleted = newer; deleted.version = 4; deleted.deleted = true; deleted.json = ""; taskStore.apply([deleted])
+        assert(taskStore.resolveConflict(taskStore.conflicts[0], keepPhone: false) == nil)
+        assert(taskStore.tasks.isEmpty && taskStore.pending.count == 1 && taskStore.pending[0].deleted)
+        let tombstone = taskStore.pending[0]; taskStore.acknowledge(tombstone)
+        assert(taskStore.pending.isEmpty && taskStore.conflicts.isEmpty)
+        print("Briefing, cloud, incidents and conflict rules: PASS 37")
     }
 }
 
