@@ -152,6 +152,7 @@ struct ConnectionSettingsView: View {
     @State private var remoteHost = ""
     @State private var remotePort = "47831"
     @State private var cloudImport = ""
+    @AppStorage("cloudServiceURL") private var cloudServiceURL = ""
     var body: some View {
         NavigationStack {
             Form {
@@ -162,8 +163,9 @@ struct ConnectionSettingsView: View {
                     Button("立即同步") { sync.sync(store: store) }.disabled((sync.credentials == nil && sync.cloudCredential == nil) || sync.busy)
                 }
                 Section("账号云同步 · 不同网络") {
-                    Link("登录账号并授权此 iPhone", destination: CloudCredential.loginURL)
-                    Text("在私人网页登录同一账号，选择iPhone并生成授权，点击“导入此iPhone”。电脑也需登录网页并授权Windows主电脑。首次授权后无需VPN或反复配对。").font(.caption).foregroundStyle(.secondary)
+                    TextField("部署得到的https://…workers.dev地址", text: $cloudServiceURL).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                    if let url = CloudCredential.loginURL(cloudServiceURL) { Link("登录账号并授权此 iPhone", destination: url) }
+                    Text("先按“云同步最少开通步骤”部署到自己的Cloudflare账号，再在两端填写同一服务地址。网页登录owner账号，选择iPhone生成授权并导入；电脑也需授权Windows主电脑。首次设置后无需VPN或反复配对。").font(.caption).foregroundStyle(.secondary)
                     if let credential = sync.cloudCredential {
                         LabeledContent("云账号已连接", value: URL(string: credential.baseUrl)?.host ?? "")
                         Button("退出云账号", role: .destructive) { sync.logoutCloud() }.disabled(sync.busy)

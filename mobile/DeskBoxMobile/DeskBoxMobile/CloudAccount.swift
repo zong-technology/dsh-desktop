@@ -8,7 +8,10 @@ struct CloudCredential: Codable {
     var role: String
     var expiresAt: Int64
     enum CodingKeys: String, CodingKey { case baseUrl = "BaseUrl", deviceId = "DeviceId", token = "Token", gateToken = "GateToken", role = "Role", expiresAt = "ExpiresAt" }
-    static let loginURL = URL(string: "https://deskbox-account-sync.inwardchime.chatgpt.site")!
+    static func loginURL(_ value: String) -> URL? {
+        guard let url = URLComponents(string: value.trimmingCharacters(in: .whitespacesAndNewlines)), url.scheme == "https", url.host?.isEmpty == false, url.user == nil, url.password == nil, url.query == nil, url.fragment == nil, url.path.isEmpty || url.path == "/" else { return nil }
+        return url.url
+    }
     static func decode(_ text: String) -> CloudCredential? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         var data = Data(trimmed.utf8)

@@ -61,6 +61,7 @@ final class SyncClient: NSObject, ObservableObject, URLSessionDelegate {
         guard !busy else { return false }
         guard let value = CloudCredential.decode(text) else { status = "云凭证无效、已过期或并非iPhone凭证"; return false }
         guard Keychain.save(value, account: "DeskBoxCloudCredential") else { status = "无法安全保存云凭证，旧配置保留"; return false }
+        UserDefaults.standard.set(value.baseUrl, forKey: "cloudServiceURL")
         cloudCredential = value; connected = false; retryAfter = .distantPast; status = "云账号已连接，将自动同步"; return true
     }
     @MainActor func logoutCloud() {
